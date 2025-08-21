@@ -1,0 +1,2098 @@
+---
+title: "Untitled"
+author: "Covadonga Rodríguez Suárez"
+date: "5/15/2025"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+counts = read.delim("human_countmatrix_030325.csv", header = TRUE, row.names = 1,sep = ";")
+```
+
+
+```{r}
+head(counts)
+```
+
+
+Then, we load the metadata to link the sample name with the groups of the experiment
+```{r}
+metadata <- read.delim("human_metadatos_030325.csv", header = TRUE, row.names = 1,sep = ";")
+metadata
+```
+
+```{r}
+group = metadata$group
+group
+```
+```{r}
+all(colnames(counts) == rownames(metadata))
+```
+
+Retry with edgeR
+
+```{r}
+library(edgeR)
+
+DGE <- DGEList(counts = counts, samples = metadata)
+
+g2k <- filterByExpr(DGE, group = "group")
+
+DGE <- DGE[g2k,]
+
+DGE <- calcNormFactors(DGE)
+
+par(mfrow=c(2,3))
+for (i in seq_len(ncol(DGE))) {
+  plotMD(DGE, column = i)
+}
+
+```
+
+```{r}
+
+modelmatrix <- model.matrix(~0 + group)
+
+DGE <- estimateDisp(DGE, modelmatrix)
+fit <- glmQLFit(DGE, modelmatrix, robust = T)
+
+plotBCV(DGE)
+plotQLDisp(fit)
+
+
+```
+
+```{r}
+colnames(modelmatrix)
+```
+
+
+CTC vs P
+
+```{r}
+library(ggplot2)
+
+test_CTCvsP <- glmQLFTest(fit, contrast = c(0, 1, 0, -1))
+
+DEGs_CTCvsP <- topTags(test_CTCvsP, n = nrow(fit), sort.by = "logFC")
+
+table_CTCvsP <- DEGs_CTCvsP$table
+table_CTCvsP$ensembl_id <- rownames(table_CTCvsP)
+
+ggplot(table_CTCvsP, aes(x = logFC, y = -log10(FDR))) + 
+  geom_point()
+
+```
+```{r}
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+
+# 1) Filter for |log2FC| > 2 & FDR < 0.05
+sig_CTCvsP <- subset(
+  table_CTCvsP,
+  abs(logFC) > 2 & FDR < 0.05
+)
+
+# 2) Sort by ascending FDR
+sig_CTCvsP <- sig_CTCvsP[ order(sig_CTCvsP$FDR), ]
+
+# 3) Add SYMBOL column by mapping ENSEMBL → SYMBOL
+sig_CTCvsP$symbol <- mapIds(
+  org.Hs.eg.db,
+  keys      = sub("\\..*$","", sig_CTCvsP$ensembl_id),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+sig_CTCvsP <- sig_CTCvsP[ 
+  !is.na(sig_CTCvsP$symbol) & sig_CTCvsP$symbol != "NA", 
+]
+
+# 4) Reorder columns to place symbol after ensembl_id
+sig_CTCvsP <- sig_CTCvsP[, c(
+  "ensembl_id", "symbol",
+  "logFC", "logCPM", "F", "PValue", "FDR"
+)]
+
+# 5) Write to CSV
+# write.csv(
+#   sig_CTCvsP,
+#   file      = "A549_CTCvsP_DEGs_absFC2_FDR05.csv",
+#   sep       = ";",
+#   row.names = FALSE,
+#   quote     = FALSE,
+#   dec       = "."
+# )
+
+# 6) Preview the first few rows
+head(sig_CTCvsP)
+```
+
+
+AG vs P
+
+```{r}
+library(ggplot2)
+test_AGvsP <- glmQLFTest(fit, contrast = c(1, 0, 0, -1))
+
+DEGs_AGvsP <- topTags(test_AGvsP, n = nrow(fit), sort.by = "logFC")
+
+table_AGvsP <- DEGs_AGvsP$table
+table_AGvsP$ensembl_id <- rownames(table_AGvsP)
+
+ggplot(table_AGvsP, aes(x = logFC, y = -log10(FDR))) + 
+  geom_point()
+
+```
+```{r}
+# 1) Filter for |log2FC| > 2 & FDR < 0.05
+sig_AGvsP <- subset(
+  table_AGvsP,
+  abs(logFC) > 2 & FDR < 0.05
+)
+
+# 2) Sort rows by ascending FDR
+sig_AGvsP <- sig_AGvsP[ order(sig_AGvsP$FDR), ]
+
+# 3) Add SYMBOL column by mapping ENSEMBL → SYMBOL
+sig_AGvsP$symbol <- mapIds(
+  org.Hs.eg.db,
+  keys      = sub("\\..*$","", sig_AGvsP$ensembl_id),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+sig_AGvsP <- sig_AGvsP[ 
+  !is.na(sig_AGvsP$symbol) & sig_AGvsP$symbol != "NA", 
+]
+
+# 4) Select and reorder columns of interest (include symbol)
+sig_AGvsP <- sig_AGvsP[, c(
+  "ensembl_id", "symbol",
+  "logFC", "logCPM", "F", "PValue", "FDR"
+)]
+
+# 5) Write to CSV
+# write.csv(
+#   sig_AGvsP,
+#   file      = "A549_AGvsP_DEGs_absFC2_FDR05.csv",
+#   sep       = ";",
+#   row.names = FALSE,
+#   quote     = FALSE,
+#   dec       = "."
+# )
+
+# 6) Show first few lines
+head(sig_AGvsP)
+```
+
+
+L vs P
+
+```{r}
+test_LvsP <- glmQLFTest(fit, contrast = c(0, 0, 1, -1))
+
+DEGs_LvsP <- topTags(test_LvsP, n = nrow(fit), sort.by = "logFC")
+
+table_LvsP <- DEGs_LvsP$table
+table_LvsP$ensembl_id <- rownames(table_LvsP)
+
+ggplot(table_LvsP, aes(x = logFC, y = -log10(FDR))) + 
+  geom_point()
+```
+```{r}
+# 1) Filter for |log2FC| > 2 & FDR < 0.05
+sig_LvsP <- subset(
+  table_LvsP,
+  abs(logFC) > 2 & FDR < 0.05
+)
+
+# 2) Sort rows by ascending FDR
+sig_LvsP <- sig_LvsP[ order(sig_LvsP$FDR), ]
+
+# 3) Add SYMBOL column by mapping ENSEMBL → SYMBOL
+sig_LvsP$symbol <- mapIds(
+  org.Hs.eg.db,
+  keys      = sub("\\..*$","", sig_LvsP$ensembl_id),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+sig_LvsP <- sig_LvsP[ 
+  !is.na(sig_LvsP$symbol) & sig_LvsP$symbol != "NA", 
+]
+
+# 4) Select and reorder columns of interest (include symbol)
+sig_LvsP <- sig_LvsP[, c(
+  "ensembl_id", "symbol",
+  "logFC", "logCPM", "F", "PValue", "FDR"
+)]
+
+# 5) Write to CSV
+# write.csv(
+#   sig_LvsP,
+#   file      = "A549_LvsP_DEGs_absFC2_FDR05.csv",
+#   sep       = ";",
+#   row.names = FALSE,
+#   quote     = FALSE,
+#   dec       = "."
+# )
+
+# 6) Show first few lines
+head(sig_LvsP)
+```
+
+
+Metastasic Lines: AG vs L
+
+```{r}
+test_AGvsL <- glmQLFTest(fit, contrast = c(1, 0, -1, 0))
+
+DEGs_AGvsL <- topTags(test_AGvsL, n = nrow(fit), sort.by = "logFC")
+
+table_AGvsL <- DEGs_AGvsL$table
+table_AGvsL$ensembl_id <- rownames(table_AGvsL)
+
+ggplot(table_AGvsL, aes(x = logFC, y = -log10(FDR))) + 
+  geom_point()
+```
+```{r}
+# 1) Filter for |log2FC| > 2 & FDR < 0.05
+sig_AGvsL <- subset(
+  table_AGvsL,
+  abs(logFC) > 2 & FDR < 0.05
+)
+
+# 2) Sort by ascending FDR
+sig_AGvsL <- sig_AGvsL[ order(sig_AGvsL$FDR), ]
+
+# 3) Add a SYMBOL column by mapping ENSEMBL → SYMBOL
+sig_AGvsL$symbol <- mapIds(
+  org.Hs.eg.db,
+  keys      = sub("\\..*$","", sig_AGvsL$ensembl_id),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+sig_AGvsL <- sig_AGvsL[ 
+  !is.na(sig_AGvsL$symbol) & sig_AGvsL$symbol != "NA", 
+]
+
+# 4) Reorder columns to put symbol next to ensembl_id
+sig_AGvsL <- sig_AGvsL[, c(
+  "ensembl_id", "symbol",
+  "logFC", "logCPM", "F", "PValue", "FDR"
+)]
+
+# 5) Write to CSV
+# write.csv(
+#   sig_AGvsL,
+#   file      = "A549_Met_AGvsL_DEGs_absFC2_FDR05.csv",
+#   sep       = ";",
+#   row.names = FALSE,
+#   quote     = FALSE,
+#   dec       = "."
+# )
+
+# 6) Preview
+head(sig_AGvsL)
+```
+
+Met AG vs CTC
+
+```{r}
+# 1) Fit and test CTC vs AG
+test_AGvsCTC <- glmQLFTest(fit, contrast = c(1, -1, 0, 0))
+
+DEGs_AGvsCTC <- topTags(test_AGvsCTC, n = nrow(fit), sort.by = "logFC")
+table_AGvsCTC <- DEGs_AGvsCTC$table
+table_AGvsCTC$ensembl_id <- rownames(table_AGvsCTC)
+
+# 2) Volcano plot
+ggplot(table_AGvsCTC, aes(x = logFC, y = -log10(FDR))) + 
+  geom_point(alpha = 0.4) +
+  geom_vline(xintercept = c(-2, 2), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  labs(
+    x = "log2 Fold Change (AG vs CTC)",
+    y = "-log10(FDR)",
+    title = "Volcano plot of CTC-vs-AG differential expression"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# 3) Filter for |log2FC| > 2 & FDR < 0.05
+sig_AGvsCTC <- subset(table_AGvsCTC, abs(logFC) > 2 & FDR < 0.05)
+
+# 4) Sort by ascending FDR
+sig_AGvsCTC <- sig_AGvsCTC[order(sig_AGvsCTC$FDR), ]
+
+# 5) Map Ensembl → SYMBOL
+sig_AGvsCTC$symbol <- mapIds(
+  org.Hs.eg.db,
+  keys      = sub("\\..*$", "", sig_AGvsCTC$ensembl_id),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+sig_AGvsCTC <- sig_AGvsCTC[!is.na(sig_AGvsCTC$symbol), ]
+
+# 6) Reorder columns
+sig_AGvsCTC <- sig_AGvsCTC[, c(
+  "ensembl_id", "symbol",
+  "logFC", "logCPM", "F", "PValue", "FDR"
+)]
+
+# 7) Export to CSV
+write.csv(
+  sig_AGvsCTC,
+  file      = "AGvsCTC_DEGs_absFC2_FDR05.csv",
+  row.names = FALSE,
+  quote     = FALSE
+)
+
+# 8) Preview
+head(sig_AGvsCTC)
+```
+Met Bone vs CTC
+```{r}
+# 1) Fit and test L vs CTC
+test_LvsCTC <- glmQLFTest(fit, contrast = c(0, -1, 1, 0))
+
+DEGs_LvsCTC <- topTags(test_LvsCTC, n = nrow(fit), sort.by = "logFC")
+table_LvsCTC <- DEGs_LvsCTC$table
+table_LvsCTC$ensembl_id <- rownames(table_LvsCTC)
+
+# 2) Volcano plot
+ggplot(table_LvsCTC, aes(x = logFC, y = -log10(FDR))) + 
+  geom_point(alpha = 0.4) +
+  geom_vline(xintercept = c(-2, 2), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  labs(
+    x = "log₂ Fold Change (LLC vs CTC)",
+    y = "-log₁₀(FDR)",
+    title = "Volcano Plot of L-vs-CTC Differential Expression"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# 3) Filter significance
+sig_LvsCTC <- subset(table_LvsCTC, abs(logFC) > 2 & FDR < 0.05)
+
+# 4) Sort by FDR
+sig_LvsCTC <- sig_LvsCTC[order(sig_LvsCTC$FDR), ]
+
+# 5) Map Ensembl → SYMBOL
+sig_LvsCTC$symbol <- mapIds(
+  org.Hs.eg.db,
+  keys      = sub("\\..*$", "", sig_LvsCTC$ensembl_id),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+sig_LvsCTC <- sig_LvsCTC[!is.na(sig_LvsCTC$symbol), ]
+
+# 6) Reorder columns
+sig_LvsCTC <- sig_LvsCTC[, c(
+  "ensembl_id", "symbol",
+  "logFC", "logCPM", "F", "PValue", "FDR"
+)]
+
+# 7) Export to CSV
+# write.csv(
+#   sig_LvsCTC,
+#   file      = "L_vs_CTC_DEGs_absFC2_FDR05.csv",
+#   row.names = FALSE,
+#   quote     = FALSE
+# )
+
+# 8) Preview
+head(sig_LvsCTC)
+```
+
+PCA
+
+
+```{r}
+# 1) Load packages
+library(vegan)     # for vegdist()
+library(ape)       # for pcoa()
+library(ggplot2)   # for plotting
+library(ggpubr)    # for stat_ellipse()
+
+# 2) compute log2-CPM
+logcpm <- cpm(DGE, log=TRUE, prior.count=1)
+
+# 3) Bray–Curtis distance on samples
+dist.mat <- vegdist(t(logcpm), method = "bray")
+
+# 4) PCoA
+pcoa.res <- pcoa(dist.mat)
+
+# 5) build a data.frame for ggplot
+pcoa.df <- data.frame(
+  PC1   = pcoa.res$vectors[,1],
+  PC2   = pcoa.res$vectors[,2],
+  group = metadata$group  # assumes your metadata has a 'group' column
+)
+
+# 6) percent variance explained
+eig    <- pcoa.res$values$Relative_eig * 100
+xlab   <- paste0("PC1 (", round(eig[1],1), "%)")
+ylab   <- paste0("PC2 (", round(eig[2],1), "%)")
+
+# 7) ggplot
+ggplot(pcoa.df, aes(PC1, PC2, color = group)) +
+  geom_point(size = 3) +
+  stat_ellipse(aes(fill = group), alpha = 0.2, geom = "polygon") +
+  xlab(xlab) + ylab(ylab) +
+  theme_classic() +
+  theme(legend.position = "right")
+```
+
+
+```{r}
+# 1. Prepare data for PCA: logCPM values
+logcpm_matrix <- cpm(DGE, log = TRUE, prior.count = 2)
+
+data_for_pca <- t(logcpm_matrix)
+
+# 2. Run PCA
+pca_results <- prcomp(data_for_pca, center = TRUE, scale. = FALSE) # You can try scale. = TRUE as well
+
+# 3. Prepare for plotting
+pca_df <- data.frame(
+  PC1 = pca_results$x[, 1],
+  PC2 = pca_results$x[, 2],
+  Group = DGE$samples$group 
+)
+
+# Calculate variance explained by each PC
+pca_summary <- summary(pca_results)
+variance_explained <- pca_summary$importance[2, 1:2] * 100 # Percentage for PC1 and PC2
+
+# 4. Visualize PCA
+ggplot(pca_df, aes(x = PC1, y = PC2, color = Group)) +
+  geom_point(size = 3) +
+  labs(
+    title = "PCA of A549 Samples",
+    x = paste0("PC1 (", sprintf("%.1f", variance_explained[1]), "% variance)"),
+    y = paste0("PC2 (", sprintf("%.1f", variance_explained[2]), "% variance)"),
+    color = "Experimental Group"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+# also create a scree plot to see variance explained by all components
+scree_data <- data.frame(
+  PC = 1:length(pca_summary$sdev),
+  Variance = pca_summary$importance[2,]
+)
+ggplot(scree_data, aes(x = PC, y = Variance)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Scree Plot", x = "Principal Component", y = "Proportion of Variance Explained") +
+  theme_minimal()
+
+```
+
+
+# PCA 
+
+```{r}
+DGE <- DGEList(counts = counts, samples = metadata)
+keep <- filterByExpr(DGE, group = metadata$group)
+DGE  <- DGE[keep, , keep.lib.sizes=FALSE]
+DGE_norm <- calcNormFactors(DGE)
+
+# 1) Get log2-CPM matrix
+logCPM <- cpm(DGE_norm, log=TRUE, prior.count=1)
+
+# 2) Transpose for PCA: samples × genes
+pca_data <- prcomp(t(logCPM), center=TRUE, scale.=TRUE)
+
+# 3) Grab the first two PCs
+scores <- as.data.frame(pca_data$x[,1:2])
+scores$sample <- rownames(scores)
+scores$group  <- metadata[ scores$sample, "group" ]
+
+# 4) % variance explained
+var_expl <- pca_data$sdev^2 / sum(pca_data$sdev^2) * 100
+
+# 5) Plot
+ggplot(scores, aes(PC1, PC2, color=group)) +
+  geom_point(size=3) +
+  xlab(sprintf("PC1: %.1f%% variance", var_expl[1])) +
+  ylab(sprintf("PC2: %.1f%% variance", var_expl[2])) +
+  theme_minimal() +
+  ggtitle("PCA of log2-CPM")
+```
+```{r}
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(dplyr)
+
+# 1) Extract PC1 loadings
+loadings     <- pca_data$rotation
+pc1_loadings <- loadings[, "PC1"]
+
+# 2) Build and rank
+df_pc1 <- data.frame(
+  ensembl_id  = rownames(loadings),
+  loading     = pc1_loadings,
+  abs_loading = abs(pc1_loadings),
+  stringsAsFactors = FALSE
+) %>%
+  arrange(desc(abs_loading))
+
+# 3) Map to SYMBOL and attach
+keys <- sub("\\..*$", "", df_pc1$ensembl_id)
+syms <- mapIds(
+  org.Hs.eg.db,
+  keys      = keys,
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+df_pc1$symbol <- syms[keys]
+
+# 4) Drop any rows with NA symbol
+df_pc1_clean <- df_pc1 %>% filter(!is.na(symbol))
+
+# 5) Take top 20 by abs_loading
+top20_pc1 <- df_pc1_clean %>% slice(1:20)
+
+# 6) View
+top20_pc1
+```
+
+
+# UMAP
+
+```{r}
+library(uwot)
+library(ggplot2)
+
+mat <- t(logCPM)
+
+set.seed(100)
+umap_emb <- uwot::umap(
+  mat,
+  n_neighbors = 5,
+  min_dist    = 0.1,
+  metric      = "euclidean"
+)
+
+umap_df <- as.data.frame(umap_emb)
+colnames(umap_df)[1:2] <- c("UMAP1","UMAP2")
+
+if (!is.null(rownames(umap_df))) {
+  umap_df$sample <- rownames(umap_df)
+} else {
+  umap_df$sample <- rownames(mat)
+}
+
+umap_df$group <- metadata[umap_df$sample, "group"]
+
+ggplot(umap_df, aes(UMAP1, UMAP2, color = group)) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  ggtitle("UMAP of A549 Samples (log2-CPM)")
+```
+
+
+# Volcano Plots
+
+```{r, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(ggrepel)
+library(org.Hs.eg.db)
+```
+
+1) CTC vs P
+
+```{r}
+# 1) Load & Prepare the table
+# add symbol column
+table_CTCvsP$symbol <- mapIds(
+  org.Hs.eg.db,
+  keys      = table_CTCvsP$ensembl_id,
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+# make a -log10(FDR) column 
+table_CTCvsP$negLog10FDR <- -log10(table_CTCvsP$FDR)
+
+
+# 2) Define “Up”, “Down” & “Not Sig”
+logFC.cutoff <- 2     
+fdr.cutoff   <- 0.05 
+
+table_CTCvsP$Significance <- "Not Sig"
+table_CTCvsP$Significance[
+  table_CTCvsP$FDR < fdr.cutoff & table_CTCvsP$logFC >  logFC.cutoff
+] <- "Up"
+table_CTCvsP$Significance[
+  table_CTCvsP$FDR < fdr.cutoff & table_CTCvsP$logFC < -logFC.cutoff
+] <- "Down"
+
+
+# 3) Build the volcano plot
+p_CTC <- ggplot(table_CTCvsP, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8",
+               "Not Sig" = "grey70",
+               "Up" = "firebrick")
+  ) +
+  labs(
+    title = "A549: CTC vs Parental",
+    x     = expression(log[2]~fold~change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue")
+
+
+
+# 4) Label top hits
+topHits_CTC <- subset(table_CTCvsP, FDR < 0.05 & abs(logFC) > 2)
+topHits_CTC <- topHits_CTC[order(topHits_CTC$FDR), ]
+top20_CTC   <- head(topHits_CTC, 20)
+
+p_CTC <- p_CTC + 
+  geom_label_repel(
+    data          = top20_CTC,
+    aes(label     = symbol),
+    size          = 3,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.65,
+    point.padding = 0.3,
+    force         = 15,
+    max.overlaps  = Inf,
+    segment.color = "black"
+  )
+
+# 5) Print
+print(p_CTC)
+```
+
+
+2) AG vs P
+
+```{r, warning=FALSE}
+
+# 1) Load & Prepare the table
+# add symbol column
+table_AGvsP$symbol <- mapIds(
+  org.Hs.eg.db,
+  keys      = table_AGvsP$ensembl_id,
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+# make a -log10(FDR) column 
+table_AGvsP$negLog10FDR <- -log10(table_AGvsP$FDR)
+
+
+# 2) Define “Up”, “Down” & “Not Sig”
+logFC.cutoff <- 2     
+fdr.cutoff   <- 0.05 
+
+table_AGvsP$Significance <- "Not Sig"
+table_AGvsP$Significance[
+  table_AGvsP$FDR < fdr.cutoff & table_AGvsP$logFC >  logFC.cutoff
+] <- "Up"
+table_AGvsP$Significance[
+  table_AGvsP$FDR < fdr.cutoff & table_AGvsP$logFC < -logFC.cutoff
+] <- "Down"
+
+
+# 3) Build the volcano plot
+p_AG <- ggplot(table_AGvsP, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8",
+               "Not Sig" = "grey70",
+               "Up" = "firebrick")
+  ) +
+  labs(
+    title = "A549: AdrenalGland vs Parental",
+    x     = expression(log[2]~fold~change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue")
+
+
+# 4) Label top hits
+topHits <- subset(table_AGvsP, FDR < 0.05 & abs(logFC) > 2)
+topHits <- topHits[order(topHits$FDR), ]
+top20   <- head(topHits, 20)
+
+p_AG <- p_AG + 
+  geom_label_repel(
+    data          = top20,
+    aes(label     = symbol),
+    size          = 3,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.65,
+    point.padding = 0.3,
+    force         = 15,
+    max.overlaps  = Inf,
+    segment.color = "black"
+  )
+
+# 5) Print
+print(p_AG)
+```
+
+3) L vs P
+
+```{r, warning=FALSE}
+
+# 1) Load & Prepare the table
+# add symbol column
+table_LvsP$symbol <- mapIds(
+  org.Hs.eg.db,
+  keys      = table_LvsP$ensembl_id,
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+# make a -log10(FDR) column 
+table_LvsP$negLog10FDR <- -log10(table_LvsP$FDR)
+
+
+# 2) Define “Up”, “Down” & “Not Sig”
+logFC.cutoff <- 2     
+fdr.cutoff   <- 0.05  
+
+table_LvsP$Significance <- "Not Sig"
+table_LvsP$Significance[
+  table_LvsP$FDR < fdr.cutoff & table_LvsP$logFC >  logFC.cutoff
+] <- "Up"
+table_LvsP$Significance[
+  table_LvsP$FDR < fdr.cutoff & table_LvsP$logFC < -logFC.cutoff
+] <- "Down"
+
+
+# 3) Build the volcano plot
+p_L <- ggplot(table_LvsP, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8",
+               "Not Sig" = "grey70",
+               "Up" = "firebrick")
+  ) +
+  labs(
+    title = "A549: Bone vs Parental",
+    x     = expression(log[2]~fold~change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue")
+
+
+# 4) Label top hits
+topHits <- subset(table_LvsP, FDR < 0.05 & abs(logFC) > 2)
+topHits <- topHits[order(topHits$FDR), ]
+top20   <- head(topHits, 20)
+
+p_L <- p_L + 
+  geom_label_repel(
+    data          = top20,
+    aes(label     = symbol),
+    size          = 3,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.65,
+    point.padding = 0.3,
+    force         = 15,
+    max.overlaps  = Inf,
+    segment.color = "black"
+  )
+
+# 5) Print
+print(p_L)
+```
+4) Metastasic lines: AG vs L
+
+```{r}
+# 1) Load & Prepare the table
+# add symbol column
+table_AGvsL$symbol <- mapIds(
+  org.Hs.eg.db,
+  keys      = table_AGvsL$ensembl_id,
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+# make a -log10(FDR) column 
+table_AGvsL$negLog10FDR <- -log10(table_AGvsL$FDR)
+
+
+# 2) Define “Up”, “Down” & “Not Sig”
+logFC.cutoff <- 2    
+fdr.cutoff   <- 0.05
+
+table_AGvsL$Significance <- "Not Sig"
+table_AGvsL$Significance[
+  table_AGvsL$FDR < fdr.cutoff & table_AGvsL$logFC >  logFC.cutoff
+] <- "Up"
+table_AGvsL$Significance[
+  table_AGvsL$FDR < fdr.cutoff & table_AGvsL$logFC < -logFC.cutoff
+] <- "Down"
+
+
+# 3) Build the volcano plot
+p_AGvsL <- ggplot(table_AGvsL, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8",
+               "Not Sig" = "grey70",
+               "Up" = "firebrick")
+  ) +
+  labs(
+    title = "A549 Metastasic Lines: AdrenalGland vs Bone",
+    x     = expression(log[2]~fold~change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue")
+
+
+# 4) Label top hits
+topHits_AGvsL <- subset(table_AGvsL, FDR < 0.05 & abs(logFC) > 2)
+topHits_AGvsL <- topHits_AGvsL[order(topHits_AGvsL$FDR), ]
+top20_AGvsL   <- head(topHits_AGvsL, 20)
+
+p_AGvsL <- p_AGvsL + 
+  geom_label_repel(
+    data          = top20_AGvsL,
+    aes(label     = symbol),
+    size          = 3,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.65,
+    point.padding = 0.3,
+    force         = 15,
+    max.overlaps  = Inf,
+    segment.color = "black"
+  )
+
+
+print(p_AGvsL)
+```
+
+Met AG vs CTC
+```{r}
+# 1) Load & Prepare the table
+# add symbol column
+table_AGvsCTC$symbol <- mapIds(
+  org.Hs.eg.db,
+  keys      = sub("\\..*$", "", table_AGvsCTC$ensembl_id),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+# add –log10(FDR)
+table_AGvsCTC$negLog10FDR <- -log10(table_AGvsCTC$FDR)
+
+
+# 2) Define “Up”, “Down” & “Not Sig”
+logFC.cutoff <- 2     
+fdr.cutoff   <- 0.05 
+
+table_AGvsCTC$Significance <- "Not Sig"
+table_AGvsCTC$Significance[
+  table_AGvsCTC$FDR < fdr.cutoff & table_AGvsCTC$logFC >  logFC.cutoff
+] <- "Up"
+table_AGvsCTC$Significance[
+  table_AGvsCTC$FDR < fdr.cutoff & table_AGvsCTC$logFC < -logFC.cutoff
+] <- "Down"
+
+
+
+# 3) Build the volcano plot
+p_AGvsCTC <- ggplot(table_AGvsCTC, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8",
+               "Not Sig" = "grey70",
+               "Up" = "firebrick")
+  ) +
+  labs(
+    title = "A549: AG vs CTC",
+    x     = expression(log[2]~fold~change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue")
+
+
+# 4) Label top hits
+topHits_AGvsCTC <- subset(table_AGvsCTC, FDR < fdr.cutoff & abs(logFC) > logFC.cutoff)
+topHits_AGvsCTC <- topHits_AGvsCTC[order(topHits_AGvsCTC$FDR), ]
+top20_AGvsCTC  <- head(topHits_AGvsCTC, 20)
+
+p_AGvsCTC <- p_AGvsCTC + 
+  geom_label_repel(
+    data          = top20_AGvsCTC,
+    aes(label     = symbol),
+    size          = 2,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.65,
+    point.padding = 0.3,
+    force         = 15,
+    max.overlaps  = Inf,
+    segment.color = "black"
+  )
+
+# 5) Print
+print(p_AGvsCTC)
+```
+Met Bone vs CTC
+
+```{r}
+# 1) Load & Prepare the table
+# add symbol column
+table_LvsCTC$symbol <- mapIds(
+  org.Hs.eg.db,
+  keys      = sub("\\..*$", "", table_LvsCTC$ensembl_id),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+# add –log10(FDR)
+table_LvsCTC$negLog10FDR <- -log10(table_LvsCTC$FDR)
+
+
+# 2) Define “Up”, “Down” & “Not Sig”
+logFC.cutoff <- 2    
+fdr.cutoff   <- 0.05  
+
+table_LvsCTC$Significance <- "Not Sig"
+table_LvsCTC$Significance[
+  table_LvsCTC$FDR < fdr.cutoff & table_LvsCTC$logFC >  logFC.cutoff
+] <- "Up"
+table_LvsCTC$Significance[
+  table_LvsCTC$FDR < fdr.cutoff & table_LvsCTC$logFC < -logFC.cutoff
+] <- "Down"
+
+
+# 3) Build the volcano plot
+p_LvsCTC <- ggplot(table_LvsCTC, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8",
+               "Not Sig" = "grey70",
+               "Up" = "firebrick")
+  ) +
+  labs(
+    title = "A549: Bone vs CTC",
+    x     = expression(log[2]~fold~change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue")
+
+
+# 4) Label your top hits
+topHits_LvsCTC <- subset(table_LvsCTC, FDR < fdr.cutoff & abs(logFC) > logFC.cutoff)
+topHits_LvsCTC <- topHits_LvsCTC[order(topHits_LvsCTC$FDR), ]
+top20_LvsCTC  <- head(topHits_LvsCTC, 20)
+
+p_LvsCTC <- p_LvsCTC + 
+  geom_label_repel(
+    data          = top20_LvsCTC,
+    aes(label     = symbol),
+    size          = 2,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.65,
+    point.padding = 0.3,
+    force         = 15,
+    max.overlaps  = Inf,
+    segment.color = "black"
+  )
+
+# 5) Print
+print(p_LvsCTC)
+```
+
+
+# Heatmaps
+
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+library(edgeR)
+library(pheatmap)
+library(RColorBrewer)
+library(matrixStats)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+library(ComplexHeatmap)
+library(circlize)
+library(Cairo)
+```
+
+
+
+Global Heatmap
+
+```{r}
+# 1) Compute log2‐CPM matrix from the normalized DGE
+cpm_mat <- cpm(DGE_norm, log=TRUE, prior.count=1)
+
+# 2) Select top 20 most variable genes
+variances <- rowVars(cpm_mat)
+topVarIdx <- order(variances, decreasing=TRUE)[1:20]
+topGenes  <- rownames(cpm_mat)[topVarIdx]
+mat       <- cpm_mat[topGenes, ]
+
+# 3) Map ENSEMBL → SYMBOL
+ensembl_ids   <- sub("\\..*$", "", topGenes)
+symbol_map    <- mapIds(
+  org.Hs.eg.db,
+  keys      = ensembl_ids,
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+rownames(mat) <- symbol_map
+
+# 4) Center rows
+mat <- mat - rowMeans(mat)
+
+# 5) Column annotation & ordering
+annotation_col <- data.frame(
+  group = DGE_norm$samples$group,
+  row.names = colnames(mat)
+)
+
+desired_order <- c(
+  "AP1","AP2","AP3",      
+  "ACTC1","ACTC2","ACTC3",
+  "AAG1","AAG2","AAG3",   
+  "AL1","AL2","AL3"        
+)
+
+mat2 <- mat[, desired_order]
+ann2 <- annotation_col[desired_order, , drop = FALSE]
+
+
+# 6) Plot heatmap
+colors <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+my_group_colors <- c(
+  AG  = "#1b9e77",  
+  CTC = "#d95f02",  
+  L   = "#7570b3",  
+  P   = "#e7298a"   
+)
+
+pheatmap(
+  mat2,
+  annotation_col = ann2,
+  color          = colors,
+  annotation_colors = list(group = my_group_colors),
+  show_rownames  = TRUE,
+  cluster_cols   = FALSE,
+  main           = "A549: Top 20 Most Variable Genes (edgeR log2-CPM)"
+)
+```
+1) CTC vs P
+
+```{r}
+# 1) Compute log2-CPM matrix once
+cpm_mat <- cpm(DGE_norm, log = TRUE, prior.count = 1)
+
+# 2) Pull Top 20 DEGs from table_CTCvsP
+resSig_CTCvsP <- subset(table_CTCvsP, abs(logFC) > 2 & FDR < 0.01)
+resSig_CTCvsP <- resSig_CTCvsP[order(resSig_CTCvsP$FDR), ]
+top20_CTCvsP  <- head(resSig_CTCvsP, 20)
+
+# strip version suffix to match rownames(cpm_mat)
+genes20 <- sub("\\..*$", "", top20_CTCvsP$ensembl_id)
+
+# 3) Subset CPM matrix to those 20 genes
+present  <- intersect(genes20, rownames(cpm_mat))
+mat0     <- cpm_mat[present, , drop = FALSE]
+
+# 4) Rename rows by the SYMBOL column
+symb     <- top20_CTCvsP$symbol[
+               match(present, sub("\\..*$","", top20_CTCvsP$ensembl_id))
+             ]
+rownames(mat0) <- symb
+
+# 5) Center each gene (row) to zero mean
+mat      <- mat0 - rowMeans(mat0)
+
+# 6) Build annotation and reorder columns
+annotation_col <- data.frame(
+  group     = DGE_norm$samples$group,
+  row.names = colnames(mat)
+)
+
+desired_order <- c("AP1","AP2","AP3",   # Parental
+                   "ACTC1","ACTC2","ACTC3")  # CTC
+
+mat2 <- mat[, desired_order, drop = FALSE]
+ann2 <- annotation_col[desired_order, , drop = FALSE]
+
+# drop any unused factor levels
+ann2$group <- droplevels(ann2$group)
+
+# 7) Define a color palette and annotation colors
+heat_colors    <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+group_colors   <- c(P = "#e7298a", CTC = "#d95f02") 
+
+# 8) Draw the heatmap
+pheatmap(
+  mat2,
+  annotation_col    = ann2,
+  annotation_colors = list(group = group_colors),
+  color             = heat_colors,
+  cluster_cols      = FALSE,
+  show_rownames     = TRUE,
+  main              = "A549 CTC vs Parental: Top 20 DEGs (edgeR log2-CPM)"
+)
+```
+
+
+Heatmap AG vs P
+
+```{r}
+# 1) Compute log2‐CPM matrix once
+cpm_mat_AGvsP <- cpm(DGE_norm, log = TRUE, prior.count = 1)
+
+# 2) Subset to the genes in your DE table
+genes_AGvsP        <- sub("\\..*$", "", rownames(table_AGvsP))
+common_genes_AGvsP <- intersect(genes_AGvsP, rownames(cpm_mat_AGvsP))
+cpm_sub_AGvsP      <- cpm_mat_AGvsP[common_genes_AGvsP, , drop = FALSE]
+
+# 3) Select top 20 most variable among those
+variances_AGvsP   <- rowVars(cpm_sub_AGvsP)
+topVarIdx_AGvsP   <- head(order(variances_AGvsP, decreasing = TRUE), 20)
+topGenes_AGvsP    <- rownames(cpm_sub_AGvsP)[topVarIdx_AGvsP]
+mat_AGvsP         <- cpm_sub_AGvsP[topVarIdx_AGvsP, , drop = FALSE]
+
+# 4) Map ENSEMBL → SYMBOL and drop any NAs
+symbol_map_AGvsP  <- mapIds(
+  org.Hs.eg.db,
+  keys      = sub("\\..*$","", topGenes_AGvsP),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+valid_AGvsP       <- !is.na(symbol_map_AGvsP)
+mat_AGvsP         <- mat_AGvsP[valid_AGvsP, , drop = FALSE]
+symbol_map_AGvsP  <- symbol_map_AGvsP[valid_AGvsP]
+rownames(mat_AGvsP) <- symbol_map_AGvsP
+
+# 5) Center rows
+mat_centered_AGvsP <- mat_AGvsP - rowMeans(mat_AGvsP)
+
+# 6) Build annotation & reorder columns
+annotation_col_AGvsP <- data.frame(
+  group     = DGE_norm$samples$group,
+  row.names = colnames(mat_centered_AGvsP)
+)
+desired_order_AGvsP <- c("AP1","AP2","AP3", "AAG1","AAG2","AAG3")
+mat2_AGvsP  <- mat_centered_AGvsP[, desired_order_AGvsP, drop = FALSE]
+ann2_AGvsP  <- annotation_col_AGvsP[desired_order_AGvsP, , drop = FALSE]
+
+# Drop unused levels so annotation_colors only needs AG & P
+ann2_AGvsP$group <- droplevels(ann2_AGvsP$group)
+
+# 7) Plot heatmap
+heat_colors   <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+my_group_colors <- c(P = "#e7298a", AG = "#1b9e77")
+
+pheatmap(
+  mat2_AGvsP,
+  annotation_col    = ann2_AGvsP,
+  annotation_colors = list(group = my_group_colors),
+  color             = heat_colors,
+  cluster_cols      = FALSE,
+  show_rownames     = TRUE,
+  main              = "A549 AG vs Parental: Top 20 Most Variable Genes"
+)
+```
+
+Heatmap L vs P
+
+```{r}
+# 1) Compute log2-CPM matrix once
+cpm_mat_LvsP <- cpm(DGE_norm, log = TRUE, prior.count = 1)
+
+# 2) Pull Top 20 DEGs from table_LvsP (|logFC| > 2 & FDR < 0.01)
+resSig_LvsP <- subset(table_LvsP, abs(logFC) > 2 & FDR < 0.01)
+resSig_LvsP <- resSig_LvsP[order(resSig_LvsP$FDR), ]
+top20_LvsP  <- head(resSig_LvsP, 20)
+
+# strip version suffix to match rownames(cpm_mat)
+genes_LvsP   <- sub("\\..*$", "", top20_LvsP$ensembl_id)
+
+# 3) Subset CPM matrix to those genes
+present_LvsP <- intersect(genes_LvsP, rownames(cpm_mat_LvsP))
+mat0_LvsP    <- cpm_mat_LvsP[present_LvsP, , drop = FALSE]
+
+# 4) Rename rows by your symbol column, dropping any NA
+symb_LvsP    <- top20_LvsP$symbol[
+                  match(present_LvsP, sub("\\..*$","", top20_LvsP$ensembl_id))
+                ]
+valid_LvsP   <- !is.na(symb_LvsP)
+mat0_LvsP    <- mat0_LvsP[valid_LvsP, , drop = FALSE]
+symb_LvsP    <- symb_LvsP[valid_LvsP]
+rownames(mat0_LvsP) <- symb_LvsP
+
+# 5) Center rows
+mat_LvsP     <- mat0_LvsP - rowMeans(mat0_LvsP)
+
+# 6) Build annotation & reorder columns (Parental then Limb)
+annot_LvsP   <- data.frame(
+  group     = DGE_norm$samples$group,
+  row.names = colnames(mat_LvsP)
+)
+
+desired_order_LvsP <- c("AP1","AP2","AP3",  # Parental
+                        "AL1","AL2","AL3")  # Limb
+
+mat2_LvsP  <- mat_LvsP[, desired_order_LvsP, drop = FALSE]
+ann2_LvsP  <- annot_LvsP[desired_order_LvsP, , drop = FALSE]
+
+# Drop unused levels so annotation_colors only needs P & L
+ann2_LvsP$group <- droplevels(ann2_LvsP$group)
+
+# 7) Define color palettes
+heat_colors     <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+my_group_colors <- c(P = "#e7298a", L = "#7570b3")
+
+pheatmap(
+  mat2_LvsP,
+  annotation_col    = ann2_LvsP,
+  annotation_colors = list(group = my_group_colors),
+  color             = heat_colors,
+  cluster_cols      = FALSE,
+  show_rownames     = TRUE,
+  main              = "A549 Bone vs Parental: Top 20 DEGs (edgeR log2-CPM)"
+)
+```
+
+Heatmap Metastasic Lines: AG vs L
+
+```{r}
+# 1) Compute log2-CPM from the normalized DGE
+cpm_mat_AGvsL <- cpm(DGE_norm, log = TRUE, prior.count = 1)
+
+# 2) Pull Top 20 DEGs from table_AGvsL (|logFC| > 2 & FDR < 0.01)
+resSig_AGvsL <- subset(table_AGvsL, abs(logFC) > 2 & FDR < 0.01)
+resSig_AGvsL <- resSig_AGvsL[order(resSig_AGvsL$FDR), ]
+top20_AGvsL  <- head(resSig_AGvsL, 20)
+
+# strip version suffix for indexing
+genes_AGvsL   <- sub("\\..*$", "", top20_AGvsL$ensembl_id)
+present_AGvsL <- intersect(genes_AGvsL, rownames(cpm_mat_AGvsL))
+mat0_AGvsL    <- cpm_mat_AGvsL[present_AGvsL, , drop = FALSE]
+
+# 3) Rename rows by the symbol column, dropping any NA
+symb_AGvsL <- top20_AGvsL$symbol[
+  match(present_AGvsL, sub("\\..*$","", top20_AGvsL$ensembl_id))
+]
+valid_AGvsL <- !is.na(symb_AGvsL)
+mat0_AGvsL  <- mat0_AGvsL[valid_AGvsL, , drop = FALSE]
+symb_AGvsL  <- symb_AGvsL[valid_AGvsL]
+rownames(mat0_AGvsL) <- symb_AGvsL
+
+# 4) Center each row
+mat_AGvsL <- mat0_AGvsL - rowMeans(mat0_AGvsL)
+
+# 5) Build annotation & reorder columns (AG vs L)
+annot_AGvsL <- data.frame(
+  group     = DGE_norm$samples$group,
+  row.names = colnames(mat_AGvsL)
+)
+
+desired_order_AGvsL <- c("AAG1","AAG2","AAG3",  # AdrenalGland
+                         "AL1","AL2","AL3")     # Limb
+
+mat2_AGvsL <- mat_AGvsL[, desired_order_AGvsL, drop = FALSE]
+ann2_AGvsL <- annot_AGvsL[desired_order_AGvsL, , drop = FALSE]
+
+# Drop unused factor levels so annotation_colors only needs AG & L
+ann2_AGvsL$group <- droplevels(ann2_AGvsL$group)
+
+# 6) Define color palettes
+heat_colors   <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+my_group_colors <- c(AG = "#1b9e77", L = "#7570b3")
+
+# 7) Draw the heatmap
+pheatmap(
+  mat2_AGvsL,
+  annotation_col    = ann2_AGvsL,
+  annotation_colors = list(group = my_group_colors),
+  color             = heat_colors,
+  cluster_cols      = FALSE,
+  show_rownames     = TRUE,
+  main              = "A549 AdrenalGland vs Bone: Top 20 DEGs (edgeR log2-CPM)"
+)
+```
+```{r}
+# 1) Compute log2-CPM from the normalized DGE
+cpm_mat_AGvsCTC <- cpm(DGE_norm, log = TRUE, prior.count = 1)
+
+# 2) Pull Top 20 DEGs from table_AGvsCTC (|logFC| > 2 & FDR < 0.01)
+resSig_AGvsCTC <- subset(table_AGvsCTC, abs(logFC) > 2 & FDR < 0.01)
+resSig_AGvsCTC <- resSig_AGvsCTC[order(resSig_AGvsCTC$FDR), ]
+top20_AGvsCTC  <- head(resSig_AGvsCTC, 20)
+
+# strip version suffix for indexing
+genes_AGvsCTC   <- sub("\\..*$", "", top20_AGvsCTC$ensembl_id)
+present_AGvsCTC <- intersect(genes_AGvsCTC, rownames(cpm_mat_AGvsCTC))
+mat0_AGvsCTC    <- cpm_mat_AGvsCTC[present_AGvsCTC, , drop = FALSE]
+
+# 3) Rename rows by the symbol column, dropping any NA
+symb_AGvsCTC <- top20_AGvsCTC$symbol[
+  match(present_AGvsCTC, sub("\\..*$","", top20_AGvsCTC$ensembl_id))
+]
+valid_AGvsCTC <- !is.na(symb_AGvsCTC)
+mat0_AGvsCTC  <- mat0_AGvsCTC[valid_AGvsCTC, , drop = FALSE]
+symb_AGvsCTC  <- symb_AGvsCTC[valid_AGvsCTC]
+rownames(mat0_AGvsCTC) <- symb_AGvsCTC
+
+# 4) Center each row
+mat_AGvsCTC <- mat0_AGvsCTC - rowMeans(mat0_AGvsCTC)
+
+# 5) Build annotation & reorder columns (AG vs CTC)
+annot_AGvsCTC <- data.frame(
+  group     = DGE_norm$samples$group,
+  row.names = colnames(mat_AGvsCTC)
+)
+
+# specify your sample order: first the AG replicates, then the CTC replicates
+desired_order_AGvsCTC <- c("ACTC1","ACTC2","ACTC3", "AAG1","AAG2","AAG3")
+
+mat2_AGvsCTC <- mat_AGvsCTC[, desired_order_AGvsCTC, drop = FALSE]
+ann2_AGvsCTC <- annot_AGvsCTC[desired_order_AGvsCTC, , drop = FALSE]
+
+# Drop unused factor levels so annotation_colors only needs AG & CTC
+ann2_AGvsCTC$group <- droplevels(ann2_AGvsCTC$group)
+
+# 6) Define color palettes
+heat_colors      <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+my_group_colors  <- c(AG = "#1b9e77", CTC = "#d95f02")
+
+# 7) Draw the heatmap
+pheatmap(
+  mat2_AGvsCTC,
+  annotation_col    = ann2_AGvsCTC,
+  annotation_colors = list(group = my_group_colors),
+  color             = heat_colors,
+  cluster_cols      = FALSE,
+  show_rownames     = TRUE,
+  main              = "A549 AdrenalGland vs CTC: Top 20 DEGs (edgeR log2-CPM)"
+)
+```
+```{r}
+# 1) Compute log2-CPM from the normalized DGE
+cpm_mat <- cpm(DGE_norm, log = TRUE, prior.count = 1)
+
+# 2) Identify Top 20 DEGs for Limb (L) vs CTC (|logFC| > 2 & FDR < 0.01)
+resSig_LvsCTC <- subset(table_LvsCTC, abs(logFC) > 2 & FDR < 0.01)
+resSig_LvsCTC <- resSig_LvsCTC[order(resSig_LvsCTC$FDR), ]
+top20_LvsCTC  <- head(resSig_LvsCTC, 20)
+
+# strip version suffix and subset CPM matrix
+genes20       <- sub("\\..*$", "", top20_LvsCTC$ensembl_id)
+present       <- intersect(genes20, rownames(cpm_mat))
+mat0_LvsCTC   <- cpm_mat[present, , drop = FALSE]
+
+# 3) Rename rows to gene symbols
+symb_LvsCTC   <- top20_LvsCTC$symbol[
+  match(present, sub("\\..*$", "", top20_LvsCTC$ensembl_id))
+]
+ok            <- !is.na(symb_LvsCTC)
+mat0_LvsCTC   <- mat0_LvsCTC[ok, , drop = FALSE]
+rownames(mat0_LvsCTC) <- symb_LvsCTC[ok]
+
+# 4) Center each row
+mat_c_LvsCTC  <- mat0_LvsCTC - rowMeans(mat0_LvsCTC)
+
+# 5) Select and order the Limb and CTC samples
+keep_cols     <- c("ACTC1","ACTC2","ACTC3","AL1","AL2","AL3")
+stopifnot(all(keep_cols %in% colnames(mat_c_LvsCTC)))
+
+mat2_LvsCTC   <- mat_c_LvsCTC[, keep_cols, drop = FALSE]
+annot_LvsCTC  <- data.frame(
+  group     = DGE_norm$samples$group,
+  row.names = colnames(mat_c_LvsCTC)
+)[keep_cols, , drop = FALSE]
+annot_LvsCTC$group <- droplevels(annot_LvsCTC$group)
+
+# 6) Define color palettes
+heat_cols     <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+group_cols    <- c(L = "#7570b3", CTC = "#d95f02")
+
+# 7) Draw the heatmap
+pheatmap(
+  mat2_LvsCTC,
+  annotation_col    = annot_LvsCTC,
+  annotation_colors = list(group = group_cols),
+  color             = heat_cols,
+  cluster_cols      = FALSE,
+  show_rownames     = TRUE,
+  main              = "A549 Bone (L) vs CTC: Top 20 DEGs (log2-CPM)"
+)
+```
+
+
+
+GSEA (ORA) using ClusterProfiler
+
+```{r, message=F, warning=F}
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+library(clusterProfiler)
+library(tidyverse)
+library(enrichplot)
+library(fgsea) 
+library(igraph)
+library(ggraph)
+library(visNetwork)
+library(GO.db)
+library(GOSemSim)
+library(GOenrichment)
+library(tidyr)
+```
+
+
+1) For AG vs P
+
+```{r}
+# Make sure they are data frames or tibbles
+table_AGvsP_tb <- as_tibble(table_AGvsP)
+sig_AGvsP_tb <- as_tibble(sig_AGvsP)
+
+table_AGvsP_tb <- as_tibble(table_AGvsP) %>%
+  mutate(
+    ensembl_clean = sub("\\..*$","", ensembl_id),
+    symbol = mapIds(
+      org.Hs.eg.db, 
+      keys      = ensembl_clean,
+      column    = "SYMBOL",
+      keytype   = "ENSEMBL",
+      multiVals = "first"
+    )
+  ) %>%
+  select(-ensembl_clean)   # drop the helper column if you like
+
+# Background set of genes from your table_AGvsL data
+all_genes_from_table <- table_AGvsP_tb %>%
+  # 1) create your symbol column
+  mutate(
+    ensembl_clean = sub("\\..*$", "", ensembl_id),
+    symbol = mapIds(
+      org.Hs.eg.db,
+      keys      = ensembl_clean,
+      column    = "SYMBOL",
+      keytype   = "ENSEMBL",
+      multiVals = "first"
+    )
+  ) %>%
+  # 2) drop any that still didn’t map
+  filter(!is.na(symbol)) %>%
+  # 3) pull unique symbols
+  pull(symbol) %>%
+  unique()
+
+# Significant genes from your sig_AGvsL data
+# sig_AGvsL is already filtered by FDR < 0.05 and logFC > 2 (as per your previous info)
+significant_genes <- sig_AGvsP_tb %>%
+  dplyr::filter(!is.na(symbol)) %>%
+  pull(symbol) %>%
+  unique() # Ensure unique gene symbols
+
+# Check if gene lists are populated
+if(length(all_genes_from_table) == 0) stop("Background gene list is empty. Check table_AGvsL and 'symbol' column.")
+if(length(significant_genes) == 0) stop("Significant gene list is empty. Check sig_AGvsL and 'symbol' column.")
+
+print(paste("Number of background genes:", length(all_genes_from_table)))
+print(paste("Number of significant genes:", length(significant_genes)))
+```
+
+```{r}
+ego_AGvsP <- enrichGO(gene = significant_genes,      # Your significant genes
+                      universe = all_genes_from_table, # Your background gene list
+                      keyType = "SYMBOL",            # Assuming 'symbol' column contains gene symbols
+                      OrgDb = org.Hs.eg.db,          
+                      minGSSize = 20,
+                      maxGSSize = 300,
+                      ont = "BP",                    # Biological Process, can be "MF" or "CC"
+                      pAdjustMethod = "BH",
+                      qvalueCutoff = 0.05,           # Use q-value cutoff
+                      readable = TRUE)               # Converts Entrez IDs to Symbols in output if needed
+
+# Check results
+if (!is.null(ego_AGvsP) && nrow(as.data.frame(ego_AGvsP)) > 0) {
+  print("ORA results (top):")
+  print(head(as.data.frame(ego_AGvsP)))
+} else {
+  print("No significant GO terms found by ORA.")
+}
+```
+
+
+```{r}
+# Ensure ego_AGvsP is not NULL and has results
+if (!is.null(ego_AGvsP) && nrow(as.data.frame(ego_AGvsP)) > 0) {
+
+  message("Number of rows in ego_AGvsP results before pairwise_termsim:", nrow(as.data.frame(ego_AGvsP)))
+
+  # Check if there are enough terms for pairwise comparison (at least 2)
+  if (nrow(as.data.frame(ego_AGvsP)) < 2) {
+    message("Warning: ego_AGvsP has less than 2 significant terms. emapplot requires at least 2 terms. Skipping emapplot.")
+  } else {
+    message("--- Attempting pairwise_termsim ---")
+    # pairwise_termsim modifies the enrichResult object by adding/updating the @termsim slot
+    # and returns this modified enrichResult object.
+    ego_AGvsP_with_sim <- pairwise_termsim(
+      ego_AGvsP,
+      method = "JC",      # Jaccard Index
+      semData = NULL
+    )
+
+    message("--- pairwise_termsim completed. Checking the structure of the result. ---")
+    # The result ego_AGvsP_with_sim should be an enrichResult object with a populated @termsim slot
+    if (inherits(ego_AGvsP_with_sim, "enrichResult") && !is.null(ego_AGvsP_with_sim@termsim) && length(ego_AGvsP_with_sim@termsim) > 0) {
+      message(paste("Dimensions of similarity matrix in ego_AGvsP_with_sim@termsim:",
+                    nrow(ego_AGvsP_with_sim@termsim), "x", ncol(ego_AGvsP_with_sim@termsim)))
+
+      message("--- Attempting emapplot with category labels ---")
+      tryCatch({
+        # Pass the enrichResult object that now contains the similarity matrix
+        plot_category_labels <- emapplot(
+          ego_AGvsP_with_sim,
+          showCategory = 30, # Adjust as needed
+          node_label = "category",
+          layout = "mds"
+        ) +
+        theme(legend.position = "none")
+
+        print(plot_category_labels)
+        message("Displayed emapplot with category labels. To save, use the Export button in RStudio's Plots tab.")
+      }, error = function(e_cat) {
+        message("Error in emapplot (category labels): ", e_cat$message)
+        message("Input object to emapplot was 'ego_AGvsP_with_sim'.")
+        message("Structure of ego_AGvsP_with_sim:")
+        print(str(ego_AGvsP_with_sim, max.level = 2)) # Show top-level structure
+      })
+
+      message("--- Attempting emapplot with group labels (less common for GO, uses 'cluster' if available) ---")
+      tryCatch({
+        plot_group_labels <- emapplot(
+          ego_AGvsP_with_sim,
+          showCategory = 30, # Adjust as needed
+          node_label = "group", # This will use cluster information if available, or default to category
+          layout = "mds"
+        ) +
+        theme(legend.position = "none")
+
+        print(plot_group_labels)
+        message("Displayed emapplot with group labels. To save, use the Export button in RStudio's Plots tab.")
+      }, error = function(e_group) {
+        message("Error in emapplot (group labels): ", e_group$message)
+      })
+
+    } else {
+      message("pairwise_termsim did not seem to correctly add the termsim slot or the slot is empty.")
+      message("Structure of object after pairwise_termsim call:")
+      print(str(ego_AGvsP_with_sim, max.level = 2))
+    }
+  }
+} else {
+  message("Skipping emapplot visualization as ego_AGvsP is NULL or has no significant results (or < 2 terms).")
+}
+```
+
+
+```{r}
+# Assuming ego_AGvsP is your valid enrichResult object from enrichGO()
+# Ensure necessary libraries are loaded, e.g.:
+# library(clusterProfiler)
+# library(enrichplot)
+# library(org.Hs.eg.db)
+# library(GOSemSim)
+# library(ggplot2)
+
+
+if (!is.null(ego_AGvsP) && inherits(ego_AGvsP, "enrichResult") && nrow(as.data.frame(ego_AGvsP)) > 0) {
+
+  message("Original number of enriched terms in ego_AGvsP: ", nrow(as.data.frame(ego_AGvsP)))
+
+  if (nrow(as.data.frame(ego_AGvsP)) > 1) {
+    message("--- Calculating pairwise term similarity for category plot ---")
+    ego_with_sim_for_category <- NULL
+    tryCatch({
+      current_ontology_cat <- ego_AGvsP@ontology
+      if (length(current_ontology_cat) == 0 || !current_ontology_cat %in% c("BP", "MF", "CC")) {
+          current_ontology_cat <- "BP" # Default if not found or invalid
+          message(paste0("Warning: Ontology in ego_AGvsP was '", ego_AGvsP@ontology, "'. Defaulting to 'BP' for godata(). Please verify this is correct."))
+      }
+      
+      if (!requireNamespace("GOSemSim", quietly = TRUE)) {
+        message("GOSemSim package is not available. Please install it.")
+        stop("GOSemSim not found.")
+      }
+      if (!requireNamespace("org.Hs.eg.db", quietly = TRUE)) {
+        message("org.Hs.eg.db package is not available. Please install it.")
+        stop("org.Hs.eg.db not found.")
+      }
+
+      # Using annoDb as suggested by GOSemSim console message
+      hsGO_semData_cat <- GOSemSim::godata(annoDb = org.Hs.eg.db, ont = current_ontology_cat, computeIC = TRUE)
+
+      ego_with_sim_for_category <- pairwise_termsim(
+        ego_AGvsP,
+        method = "JC",
+        semData = hsGO_semData_cat
+      )
+      message("Pairwise term similarity calculation complete for category plot.")
+      if (inherits(ego_with_sim_for_category, "enrichResult") && !is.null(ego_with_sim_for_category@termsim)) {
+        message("Dimensions of similarity matrix: ", nrow(ego_with_sim_for_category@termsim), "x", ncol(ego_with_sim_for_category@termsim))
+      } else {
+        message("Warning: pairwise_termsim did not seem to add a valid @termsim slot.")
+      }
+
+    }, error = function(e) {
+      message("Error during pairwise_termsim() or godata() for category plot: ", e$message)
+    })
+
+    if (!is.null(ego_with_sim_for_category) && inherits(ego_with_sim_for_category, "enrichResult") && !is.null(ego_with_sim_for_category@termsim) && length(ego_with_sim_for_category@termsim) > 0) {
+
+      message("--- Generating emapplot with category labels (no cex_label_category) ---")
+      tryCatch({
+        plot_category_labels_current_ver <- emapplot(
+          ego_with_sim_for_category,
+          showCategory = 20,         # << KEY: Reduce this to manage overlaps
+          node_label = "category",
+          layout = "fr",             # Try "kk", "mds" if "fr" is too cluttered
+          # cex_category = 1.0,      # You MIGHT be able to adjust node (circle) size with this
+          min_edge = 0.2
+          # repel = TRUE             # ggrepel is on by default if available
+        ) +
+        ggplot2::theme(legend.position = "none") + # Hides the legend
+        ggplot2::ggtitle("Enriched GO Terms (Categories)") # Adds a title to the plot
+
+        print(plot_category_labels_current_ver)
+        message("Displayed emapplot with category labels.")
+        message("To improve clarity and reduce label overlap: ")
+        message("1. Experiment by further REDUCING 'showCategory' (e.g., to 15 or 10).")
+        message("2. Try different 'layout' options ('kk', 'mds').")
+        message("3. When SAVING (Export > Save as PDF), use LARGE dimensions (e.g., 20x20 or 24x32 inches).")
+
+      }, error = function(e) {
+        message("Error during emapplot() with category labels: ", e$message)
+        message("If 'unused argument' errors persist for other arguments, your enrichplot version is very restrictive.")
+      })
+    } else {
+      message("Failed to compute or verify pairwise term similarity for the category plot. @termsim slot might be missing or invalid.")
+    }
+  } else {
+    message("Not enough terms in ego_AGvsP (<=1) to generate a network plot.")
+  }
+} else {
+  message("ego_AGvsP is NULL, not an enrichResult, or has no terms.")
+}
+```
+
+```{r}
+# library(clusterProfiler)
+# library(enrichplot)
+# library(ggplot2)
+
+
+# Check prerequisites (same as before)
+if (!exists("ego_AGvsP") || !is(ego_AGvsP, "enrichResult")) {
+  stop("Enrichment result 'ego_AGvsP' not found or is not an enrichResult object.")
+}
+if (!exists("sigOE") || !(is.data.frame(sigOE) || inherits(sigOE, "tbl_df"))) {
+  stop("Differential expression data 'sigOE' not found or is not a data frame/tibble.")
+}
+if (!"symbol" %in% names(sigOE) || !"logFC" %in% names(sigOE)) {
+  stop("The 'sigOE' dataframe must contain 'symbol' (for gene names) and 'logFC' (for log fold changes) columns.")
+}
+
+# --- 1. Prepare OE_foldchanges for coloring all relevant genes ---
+OE_foldchanges <- sigOE$logFC
+names(OE_foldchanges) <- sigOE$symbol
+OE_foldchanges <- OE_foldchanges[
+  !is.na(OE_foldchanges) &
+  !is.na(names(OE_foldchanges)) &
+  names(OE_foldchanges) != ""
+]
+if (length(OE_foldchanges) == 0) {
+  stop("OE_foldchanges vector is empty after NA removal. Check 'sigOE' data (symbol and logFC columns).")
+}
+gene_symbols_in_fc_vector <- names(OE_foldchanges)
+
+# --- 2. Identify gene symbols for which labels should be shown ---
+# User's script has abs(logFC) > 10
+genes_to_show_labels_for <- sigOE$symbol[
+    !is.na(sigOE$symbol) &
+    sigOE$symbol != "" &
+    !is.na(sigOE$logFC) &
+    abs(sigOE$logFC) > 10 # Using user's specified cutoff
+]
+genes_to_show_labels_for <- unique(genes_to_show_labels_for)
+message(paste("Identified", length(genes_to_show_labels_for), "unique genes with abs(logFC) > 10 whose labels will be shown."))
+
+
+# --- 3. Generate the base cnetplot, requesting all labels initially ---
+message("--- Generating base cnetplot (prioritizing category labels) ---")
+base_cnet_plot_obj <- NULL
+tryCatch({
+    base_cnet_plot_obj <- cnetplot(ego_AGvsP,
+        categorySize = "p.adjust",
+        node_label = "all",         # Request all labels
+        showCategory = 3,           # User's setting
+        foldChange = OE_foldchanges,
+        cex_label_gene = 0.2,       # Make gene labels a bit smaller to give categories space
+        cex_label_category = 5,   # Make category labels more prominent
+        # vertex.label.font = 5,    # Included from user's script; remove if cex_label_* are preferred and it causes issues
+        circular = FALSE,
+        colorEdge = TRUE,
+        max.overlaps = 100000           # Try to allow more overlaps to be resolved by ggrepel
+    )
+}, error = function(e) {
+    if (grepl("unused argument (max.overlaps)", e$message)) {
+        message("Warning: 'max.overlaps' is an unused argument for this version of cnetplot.")
+        message("Falling back to cnetplot without attempting to set max.overlaps directly.")
+        base_cnet_plot_obj <- cnetplot(ego_AGvsP,
+            categorySize = "p.adjust", node_label = "all",
+            showCategory = 5, foldChange = OE_foldchanges,
+            cex_label_gene = 0.4, cex_label_category = 0.8, # Keep adjusted cex
+            # vertex.label.font = 5,
+            circular = FALSE, colorEdge = TRUE)
+    } else if (grepl("unused argument (vertex.label.font)", e$message) && !grepl("unused argument (max.overlaps)", e$message)) {
+        message("Warning: 'vertex.label.font' is an unused argument. Using cex_label_* instead.")
+        message("Attempting cnetplot without vertex.label.font but with max.overlaps.")
+        base_cnet_plot_obj <- cnetplot(ego_AGvsP,
+            categorySize = "p.adjust", node_label = "all",
+            showCategory = 5, foldChange = OE_foldchanges,
+            cex_label_gene = 0.4, cex_label_category = 0.8,
+            circular = FALSE, colorEdge = TRUE, max.overlaps = 50)
+    } else if (grepl("unused argument (vertex.label.font)", e$message) && grepl("unused argument (max.overlaps)", e$message)) {
+        message("Warning: Both 'max.overlaps' and 'vertex.label.font' are unused arguments.")
+        message("Falling back to cnetplot using only cex_label_*.")
+        base_cnet_plot_obj <- cnetplot(ego_AGvsP,
+            categorySize = "p.adjust", node_label = "all",
+            showCategory = 5, foldChange = OE_foldchanges,
+            cex_label_gene = 0.4, cex_label_category = 0.8,
+            circular = FALSE, colorEdge = TRUE)
+    } else {
+        stop(paste("Error occurred during base cnetplot generation:", e$message))
+    }
+})
+
+if (is.null(base_cnet_plot_obj)) {
+    stop("Base cnetplot could not be generated. Check previous errors.")
+}
+
+# --- 4. Modify the plot's underlying data to selectively hide unwanted gene labels ---
+# Corrected message to reflect abs(logFC) > 10
+message("--- Modifying plot data to show category labels AND only labels for genes with abs(logFC) > 10 ---")
+
+if (is.null(base_cnet_plot_obj$data) || !is.data.frame(base_cnet_plot_obj$data) || nrow(base_cnet_plot_obj$data) == 0) {
+    stop("Could not access valid plot data (base_cnet_plot_obj$data) for modification.")
+}
+plot_data_for_modification <- base_cnet_plot_obj$data
+
+node_id_col <- if ("name" %in% names(plot_data_for_modification)) "name" else {
+    stop("Critical: 'name' column not found in plot_data. Cannot reliably identify nodes. Columns: ", paste(names(plot_data_for_modification), collapse=", "))
+}
+label_display_col <- if ("label" %in% names(plot_data_for_modification)) "label" else node_id_col
+
+current_labels_in_plot <- as.character(plot_data_for_modification[[label_display_col]])
+modified_labels <- current_labels_in_plot
+
+for (i in 1:nrow(plot_data_for_modification)) {
+    node_identifier <- as.character(plot_data_for_modification[[node_id_col]][i])
+    is_gene_node <- node_identifier %in% gene_symbols_in_fc_vector
+    if (is_gene_node) {
+        if (!(node_identifier %in% genes_to_show_labels_for)) {
+            modified_labels[i] <- ""
+        }
+    }
+}
+plot_data_for_modification[[label_display_col]] <- modified_labels
+cnet_plot_with_selective_labels <- base_cnet_plot_obj
+cnet_plot_with_selective_labels$data <- plot_data_for_modification
+
+# --- 5. Print the modified plot ---
+message("--- Displaying cnetplot with category labels prioritized and selectively shown gene labels ---")
+print(cnet_plot_with_selective_labels)
+
+```
+
+```{r}
+library(clusterProfiler)
+library(enrichplot)
+library(ggplot2)
+library(ggrepel)
+
+# 1) Draw only the GO‐term labels in the base cnetplot
+base <- cnetplot(
+  ego_AGvsP,
+  foldChange   = OE_foldchanges,
+  showCategory = 3,
+  categorySize = "p.adjust",
+  node_label   = "category",  # only GO‐term labels
+  circular     = FALSE,
+  layout       = "kk",
+  colorEdge    = TRUE
+)
+
+# 3) Subset to just the gene nodes you want to label
+to_label <- base$data %>%
+  filter(
+    .isCategory == FALSE,                   # drop the GO‐term nodes
+    name %in% genes_to_show_labels_for      # keep only |logFC| > 10 genes
+  )
+
+# 4) Add them with geom_text_repel
+final_plot <- base +
+  geom_text_repel(
+    data = to_label,
+    aes(x = x, y = y, label = name),
+    size = 3,
+    max.overlaps = Inf
+  )
+
+# 5) Display
+print(final_plot)
+```
+
+```{r}
+# GSEA Using clusterProfiler (with fgsea method) for BP Gene Ontology terms
+
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(enrichplot)
+library(dplyr)
+
+# --- 1. Prepare Gene List (Fold Changes) from 'table_AGvsP_tb' ---
+message("--- Preparing gene list for GSEA from 'table_AGvsP_tb' ---")
+
+if (!exists("table_AGvsP_tb") || !(is.data.frame(table_AGvsP_tb) || inherits(table_AGvsP_tb, "tbl_df"))) {
+  stop("Error: Data object 'table_AGvsP_tb' not found. Please ensure it's created from your 'AG vs P' analysis context.")
+}
+
+LFC_COLUMN_NAME_IN_INPUT <- "logFC" 
+GENE_SYMBOL_COLUMN_NAME_IN_INPUT <- "symbol"
+
+if (!LFC_COLUMN_NAME_IN_INPUT %in% names(table_AGvsP_tb)) {
+  stop(paste("Error: Log fold change column '", LFC_COLUMN_NAME_IN_INPUT, "' not found in 'table_AGvsP_tb'. Please check and adjust LFC_COLUMN_NAME_IN_INPUT.", sep=""))
+}
+if (!GENE_SYMBOL_COLUMN_NAME_IN_INPUT %in% names(table_AGvsP_tb)) {
+  stop(paste("Error: Gene symbol column '", GENE_SYMBOL_COLUMN_NAME_IN_INPUT, "' not found in 'table_AGvsP_tb'. Please check and adjust GENE_SYMBOL_COLUMN_NAME_IN_INPUT.", sep=""))
+}
+
+res_tableOE_tb_equivalent <- table_AGvsP_tb %>%
+  dplyr::select(
+    gene = all_of(GENE_SYMBOL_COLUMN_NAME_IN_INPUT),
+    log2FoldChange = all_of(LFC_COLUMN_NAME_IN_INPUT)
+  ) %>%
+  dplyr::filter(!is.na(gene) & gene != "" & !is.na(log2FoldChange)) 
+
+if (nrow(res_tableOE_tb_equivalent) == 0) {
+    stop("Error: After selecting and filtering, 'res_tableOE_tb_equivalent' has 0 rows. Check your input table_AGvsP_tb and column names.")
+}
+
+foldchanges <- res_tableOE_tb_equivalent$log2FoldChange
+names(foldchanges) <- res_tableOE_tb_equivalent$gene
+
+if (any(is.na(foldchanges))) {
+  message("Removing genes with NA fold changes.")
+  foldchanges <- foldchanges[!is.na(foldchanges)]
+}
+if (any(is.na(names(foldchanges))) || any(names(foldchanges) == "")) {
+  message("Removing entries with NA or empty gene names.")
+  foldchanges <- foldchanges[!is.na(names(foldchanges)) & names(foldchanges) != ""]
+}
+
+if (any(duplicated(names(foldchanges)))) {
+    message("Duplicate gene names found. Keeping entry with maximum absolute fold change for each duplicate.")
+    ordered_indices <- order(names(foldchanges), -abs(foldchanges))
+    foldchanges_ordered <- foldchanges[ordered_indices]
+    foldchanges <- foldchanges_ordered[!duplicated(names(foldchanges_ordered))]
+}
+
+foldchanges <- sort(foldchanges, decreasing = TRUE)
+
+message(paste("Prepared sorted gene list with", length(foldchanges), "unique genes for GSEA."))
+if (length(foldchanges) < 50) {
+    message("Warning: The number of genes in the list is quite small, which might affect GSEA performance or reliability.")
+}
+
+# --- 2. Perform GSEA for BP Gene Ontology terms ---
+message("--- Running GSEA for GO Biological Process terms using clusterProfiler (fgsea method) ---")
+
+gseaGO <- NULL 
+tryCatch({
+  gseaGO <- clusterProfiler::gseGO(
+    geneList = foldchanges,
+    ont = "BP",            
+    keyType = "SYMBOL",    
+    eps = 0,               
+    minGSSize = 20,        
+    maxGSSize = 300,       
+    pAdjustMethod = "BH",  
+    pvalueCutoff = 0.05,   
+    verbose = TRUE,        
+    OrgDb = org.Hs.eg.db,  
+    by = "fgsea"           
+  )
+  message("GSEA analysis completed.")
+}, error = function(e) {
+  message("Error during GSEA analysis: ", e$message)
+  stop("GSEA failed. Please check your input data (especially the geneList) and parameters.")
+})
+
+if (is.null(gseaGO) || nrow(gseaGO@result) == 0) {
+  message("GSEA analysis did not return any results or failed to produce a populated output object.")
+} else {
+  message(paste("GSEA returned", nrow(gseaGO@result), "terms."))
+  
+  gseaGO_results <- as.data.frame(gseaGO)
+  message("GSEA results converted to data frame 'gseaGO_results'.")
+
+  # --- 3. Visualizing GSEA Results ---
+  
+  if (nrow(gseaGO@result) > 0) {
+    message("--- Visualizing GSEA Results ---")
+    
+   
+   # A) Dotplot for significant categories
+   num_dot <- min(15, nrow(gseaGO_results))
+   if (num_dot > 0) {
+     tryCatch({
+       p_dot <- dotplot(
+         gseaGO,
+         showCategory = num_dot,
+         label_format = 25,
+         font.size    = 5
+       )
+       print(p_dot)
+       # ggsave("gsea_dotplot.pdf", p_dot, width = 10, height = 8)
+     }, error = function(e) {
+       message("Error in dotplot: ", e$message)
+     })
+   }
+    
+    # B. GSEA plot (enrichment plot) for specific gene sets
+    sorted_results_df <- gseaGO_results[order(gseaGO_results$p.adjust), ]
+    num_gene_sets_for_gseaplot <- min(3, nrow(sorted_results_df)) # Reduced to top 3 (or fewer if less results)
+    
+    if (num_gene_sets_for_gseaplot > 0) {
+      gene_set_ids_for_plot <- sorted_results_df$ID[1:num_gene_sets_for_gseaplot]
+      message(paste("Generating GSEA plots (gseaplot2) for top", num_gene_sets_for_gseaplot, "gene sets by p.adjust..."))
+      message("Gene Set IDs for gseaplot2: ", paste(gene_set_ids_for_plot, collapse=", "))
+      
+      tryCatch({
+        gsea_enrichment_plots <- enrichplot::gseaplot2(
+                                     gseaGO,
+                                     geneSetID = gene_set_ids_for_plot,
+                                     pvalue_table = FALSE,
+                                     base_size = 9 # Reduced base_size for smaller fonts (default is 11)
+                                     )
+        print(gsea_enrichment_plots)
+        
+        # To save the plot with more vertical space for labels:
+        ggsave("gsea_enrichment_plots_ag_vs_p_bp_spaced.pdf", 
+                plot = gsea_enrichment_plots, 
+                width = 10,  # Adjust width as needed
+                height = 7, # Adjust height as needed for clarity
+                limitsize = FALSE)
+         message("GSEA enrichment plots potentially saved as gsea_enrichment_plots_ag_vs_p_bp_spaced.pdf")
+        message("Tip: To further improve gseaplot2 label spacing, try plotting even fewer gene sets (e.g., 1 or 2), or increase 'height' when saving.")
+      }, error = function(e_gsea) {
+        message("Error generating gseaplot2: ", e_gsea$message)
+        message("Ensure that the geneSetIDs provided exist in the gseaGO result object.")
+      })
+    } else {
+      message("No significant gene sets to show in gseaplot2 (results might be empty or filtered out).")
+    }
+
+  } else {
+    message("No GSEA results to visualize (result table is empty).")
+  }
+}
+
+message("--- GSEA Script for AG vs P Finished ---")
+```

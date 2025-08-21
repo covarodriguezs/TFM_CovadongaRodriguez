@@ -1,0 +1,1859 @@
+---
+title: "LLC_analysis"
+author: "Covadonga Rodríguez Suárez"
+date: "2025-03-13"
+output: html_document
+---
+
+## 1) Data Preparation and Normalization
+
+```{r, message=FALSE, warning=FALSE}
+library(DESeq2)
+library(ggplot2)
+library(readr)
+```
+
+```{r}
+counts <- read.delim("mouse_featureCounts_1303.csv", header = TRUE, row.names = 1,sep = ";")
+```
+
+```{r}
+head(counts)
+```
+
+
+Then, we load the metadata to link the sample name with the groups of the experiment
+```{r}
+metadata <- read.delim("mouse_metadatos_140325.csv", header = TRUE, row.names = 1,sep = ";")
+metadata
+```
+
+
+```{r}
+group = metadata$group
+group
+```
+
+```{r}
+all(colnames(counts) == rownames(metadata))
+```
+
+
+### Build the DESeqDataSet
+
+```{r, warning=FALSE}
+dds <- DESeqDataSetFromMatrix(
+  countData = counts,
+  colData   = metadata,
+  design    = ~ group
+)
+```
+
+
+### Normalization
+```{r}
+dds <- estimateSizeFactors(dds)
+sizeFactors(dds)
+```
+
+```{r}
+counts_normalized <- counts(dds, normalized = TRUE)
+head(counts_normalized)
+```
+
+
+### Log2 transformation of read counts
+```{r}
+# Log2 transformation with a pseudocount of 1
+counts_log_normalized <- log2(counts_normalized + 1)
+```
+
+```{r}
+par(mfrow = c(1, 2))
+
+# Boxplot of untransformed normalized counts
+boxplot(counts_normalized,
+        notch = TRUE,
+        las = 2,
+        cex.axis = 0.7,
+        main = "Untransformed read counts",
+        ylab = "read counts")
+
+# Boxplot of log2-transformed normalized counts
+boxplot(counts_log_normalized,
+        notch = TRUE,
+        las = 2,
+        cex.axis = 0.7,
+        main = "Log2-transformed read counts",
+        ylab = "log2(read counts)")
+
+```
+
+
+## 2) Unsupervised clustering analysis
+
+### Data Transformation
+
+```{r, message=FALSE, warning=FALSE}
+library(vsn)
+library(hexbin)
+```
+
+For real data:
+- meanSdPlot() : computes the mean and standard deviation across genes.
+- SdPlot$gg : produces a ggplot object, which is then enhanced with a title and custom y-axis label.
+```{r}
+# Plot for raw normalized counts
+SdPlot <- meanSdPlot(counts_normalized, ranks = FALSE, plot = FALSE)
+SdPlot$gg + ggtitle("Sequencing depth normalized") +
+  ylab("Standard Deviation")
+```
+
+
+```{r}
+# Plot for log2-transformed counts (with pseudocount added)
+SdPlot_log <- meanSdPlot(counts_log_normalized, ranks = FALSE, plot = FALSE)
+SdPlot_log$gg + ggtitle("Sequencing depth normalized log2(read counts)") +
+  ylab("Standard Deviation")
+```
+
+For simulated data
+- We simulate counts with a Poisson distribution using a range of λ (mean) values to illustrate how raw counts exhibit increasing variance with increasing mean.
+- The log₂ transformation (with a pseudocount) is applied to the simulated counts, and the resulting plot shows a more homoskedastic (constant variance) distribution. log₂ transformation can stabilize variance in RNA-seq data.
+```{r}
+# Generate a sequence of lambda values from 10^(-1) to 10^(2)
+lambda <- 10^seq(from = -1, to = 2, length.out = 1000)
+
+# Simulate counts using a Poisson distribution: 1000 values for 100 samples
+cts <- matrix(rpois(1000 * 100, lambda), ncol = 100)
+```
+
+```{r}
+# Plot for simulated raw counts
+sim_SdPlot <- meanSdPlot(cts, ranks = FALSE, plot = FALSE)
+sim_SdPlot$gg + ggtitle("Simulated data: raw counts") +
+  ylab("Standard Deviation")
+```
+
+
+```{r}
+# Apply log2 transformation (adding a pseudocount of 1)
+log.cts.one <- log2(cts + 1)
+
+# Plot for simulated log2-transformed counts
+sim_SdPlot_log <- meanSdPlot(log.cts.one, ranks = FALSE, plot = FALSE)
+sim_SdPlot_log$gg + ggtitle("Simulated data: log2(read counts)") +
+  ylab("Standard Deviation")
+```
+
+
+Transformations with DESeq2
+```{r}
+# Variance Stabilizing Transformation (VST)
+vsd <- vst(dds, blind = FALSE)
+head(assay(vsd), 3)
+```
+
+```{r}
+# Regularized-logarithm Transformation (rlog)
+rld <- rlog(dds, blind = FALSE)
+head(assay(rld), 3)
+```
+
+```{r}
+# Compare sample correlations using different data transformations.
+par(mfrow = c(2, 2))
+
+# we use only 2 samples as example (LB3 and LCTC1)
+
+# 1. Raw normalized counts (normalized by sequencing depth)
+plot(counts_normalized[, 1:2],
+     cex = 0.1,
+     main = "Normalized by sequencing depth",
+     xlab = "LB3",
+     ylab = "LCTC1")
+
+# 2. Log2-transformed normalized counts (adding a pseudocount of 1)
+plot(counts_log_normalized[, 3:4],
+     cex = 0.1,
+     main = "Normalized log2(read counts)",
+     xlab = "LB3",
+     ylab = "LCTC1")
+
+# 3. rlog-transformed counts
+rlog_norm_counts <- assay(rld)
+plot(rlog_norm_counts[, 3:4],
+     cex = 0.1,
+     main = "rlog transformed",
+     xlab = "LB3",
+     ylab = "LCTC1",
+     xlim = c(0, 18),
+     ylim = c(0, 18))
+
+# 4. VST-transformed counts
+vsd_norm_counts <- assay(vsd)
+plot(vsd_norm_counts[, 3:4],
+     cex = 0.1,
+     main = "VST transformed",
+     xlab = "LB3",
+     ylab = "LCTC1",
+     xlim = c(0, 18),
+     ylim = c(0, 18))
+
+```
+
+
+### Variance stabilizing transformation
+
+We are going to use both Variance Stabilizing Transformation (VST) and Regularized-log Transformation (rlog)
+
+#### Variance Stabilizing Transformation (VST)
+
+```{r, message=FALSE, warning=FALSE}
+library(pheatmap)
+library(RColorBrewer)
+```
+
+Sample distances with VST
+```{r}
+sampleDists_vsd <- dist(t(assay(vsd)))  # distance on columns (samples)
+sampleDistMatrix_vsd <- as.matrix(sampleDists_vsd)
+
+# Modify row names to show group and replicate (adjust as desired)
+rownames(sampleDistMatrix_vsd) <- paste(
+  vsd$group,       # e.g. "B", "CTC", "L", "P"
+  vsd$replicate,   # e.g. 1, 2, 3
+  sep = "_"
+)
+
+# Optionally remove column names (to keep the heatmap uncluttered)
+colnames(sampleDistMatrix_vsd) <- NULL
+
+# Color palette
+colors <- colorRampPalette(rev(brewer.pal(9, "Blues")))(255)
+
+# Draw heatmap
+pheatmap(
+  sampleDistMatrix_vsd,
+  clustering_distance_rows = sampleDists_vsd,
+  clustering_distance_cols = sampleDists_vsd,
+  col = colors,
+  main = "LLC Sample Distance (VST)"
+)
+```
+
+
+PCA Plots with VST
+
+```{r}
+# Plot PCA colored by group
+plotPCA(vsd, intgroup = "group")
+```
+
+```{r}
+# also include the replicate
+plotPCA(vsd, intgroup = c("group", "replicate"))
+```
+
+UMAP on the top 10 principal components  using the principal components of your VST-transformed data
+```{r, message=FALSE, warning=FALSE}
+library(umap)
+
+# Perform PCA on VST-transformed data (samples as rows)
+pca_res_vsd <- prcomp(t(assay(vsd)), scale. = TRUE)
+
+# Run UMAP on the top 10 principal components (adjust n_neighbors as needed)
+umap_res_vsd <- umap(pca_res_vsd$x[, 1:10], n_neighbors = 5)
+
+# Extract the layout component from the UMAP result and convert it to a data frame
+umap_df_vsd <- as.data.frame(umap_res_vsd$layout)
+colnames(umap_df_vsd) <- c("UMAP1", "UMAP2")
+
+# Add the sample group information from your vsd object
+umap_df_vsd$group <- vsd$group
+
+# Create a professional UMAP plot using ggplot2
+p_vsd <- ggplot(umap_df_vsd, aes(x = UMAP1, y = UMAP2, color = group)) +
+  geom_point(size = 4, shape = 19, alpha = 0.8) +
+  labs(
+    title = "UMAP Projection from PCA of VST-transformed counts",
+    x = "UMAP Dimension 1",
+    y = "UMAP Dimension 2",
+    color = "Sample Group"
+  ) +
+  scale_color_brewer(palette = "Set1") +
+  theme_bw(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    panel.grid.major = element_line(color = "grey85"),
+    panel.grid.minor = element_blank()
+  )
+
+# Display the plot
+print(p_vsd)
+```
+
+
+
+#### Regularized-log Transformation (rlog)
+
+Sample distances with rlog
+```{r}
+sampleDists_rld <- dist(t(assay(rld)))
+sampleDistMatrix_rld <- as.matrix(sampleDists_rld)
+
+# Modify row names similarly
+rownames(sampleDistMatrix_rld) <- paste(
+  rld$group,
+  rld$replicate,
+  sep = "_"
+)
+
+colnames(sampleDistMatrix_rld) <- NULL
+
+# Use the same color palette
+pheatmap(
+  sampleDistMatrix_rld,
+  clustering_distance_rows = sampleDists_rld,
+  clustering_distance_cols = sampleDists_rld,
+  col = colors,
+  main = "Sample Distance (rlog)"
+)
+```
+
+PCA Plots with rlog
+```{r}
+plotPCA(rld, intgroup = "group")
+```
+
+
+```{r}
+plotPCA(rld, intgroup = c("group", "replicate"))
+```
+
+UMAP on the top 10 principal components  using the principal components of your VST-transformed data
+```{r}
+
+# Perform PCA on rlog-transformed data (samples as rows)
+pca_res_rlog <- prcomp(t(assay(rld)), scale. = TRUE)
+
+# Run UMAP on the top 10 principal components (adjust n_neighbors as needed)
+umap_res_rlog <- umap(pca_res_rlog$x[, 1:10], n_neighbors = 5)
+
+# Extract the layout component from the umap result and convert it to a data frame
+umap_df_rlog <- as.data.frame(umap_res_rlog$layout)
+colnames(umap_df_rlog) <- c("UMAP1", "UMAP2")
+
+# Add the sample group information from your rld object
+umap_df_rlog$group <- rld$group
+
+# Create a professional UMAP plot using ggplot2
+p_rlog <- ggplot(umap_df_rlog, aes(x = UMAP1, y = UMAP2, color = group)) +
+  geom_point(size = 4, shape = 19, alpha = 0.8) +
+  labs(
+    title = "UMAP Projection from PCA of rlog-transformed counts",
+    x = "UMAP Dimension 1",
+    y = "UMAP Dimension 2",
+    color = "Sample Group"
+  ) +
+  scale_color_brewer(palette = "Set1") +
+  theme_bw(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    panel.grid.major = element_line(color = "grey85"),
+    panel.grid.minor = element_blank()
+  )
+
+# Display the plot
+print(p_rlog)
+```
+
+
+## 3) Differential gene expression analysis (DGEA)
+
+Run the DESeq2 pipeline
+
+This step:
+  1) estimates size factors 
+  2) estimates dispersion parameters
+  3) fits the negative binomial GLM
+  4) performs the Wald test (or LRT if specified)
+  
+```{r, message=FALSE, warning=FALSE}
+dds$group <- relevel(dds$group, ref = "P")
+dds_DGE <- DESeq(dds)
+```
+
+Check the mean-dispersion relationship using plot of dispersion vs. mean of normalized counts, with fitted and final estimates.
+```{r}
+par(mfrow = c(1, 1))
+plotDispEsts(dds_DGE)
+```
+
+
+Extract results: compare all lines against the parental one calculating the log2 fold change of B relative to P (i.e., B ÷ P). Likewise for CTC vs. P and L vs. P.
+
+```{r}
+levels(dds$group)
+```
+
+
+1) B vs P
+```{r}
+dds_DGE_results_B_vs_P <- results(dds_DGE, contrast = c("group","B","P"))
+head(dds_DGE_results_B_vs_P)
+summary(dds_DGE_results_B_vs_P)
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+# Subset significant genes for B vs P
+resSig_B_vs_P <- subset(dds_DGE_results_B_vs_P, padj < 0.05)
+resSig_B_vs_P <- resSig_B_vs_P[order(resSig_B_vs_P$padj), ]
+
+# Add a 'symbol' column to your significant results using the ENSEMBL IDs
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+
+resSig_B_vs_P$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys = rownames(resSig_B_vs_P),
+  column = "SYMBOL",
+  keytype = "ENSEMBL",
+  multiVals = "first"
+)
+
+head(resSig_B_vs_P)
+```
+
+
+```{r}
+# Strongest downregulated genes (lowest log2 fold change)
+head(resSig_B_vs_P[order(resSig_B_vs_P$log2FoldChange), ])
+```
+
+
+```{r}
+# Strongest upregulated genes (highest log2 fold change)
+head(resSig_B_vs_P[order(resSig_B_vs_P$log2FoldChange, decreasing = TRUE), ])
+```
+
+
+```{r}
+# Export the significant results to a file
+#write.table(resSig_B_vs_P, file = "LLC_padj01_Significant_Results_B_vs_P.txt", sep = "\t", quote = FALSE, row.names = TRUE)
+```
+
+2) CTC vs P
+```{r}
+dds_DGE_results_CTC_vs_P <- results(dds_DGE, contrast = c("group","CTC","P"))
+head(dds_DGE_results_CTC_vs_P)
+summary(dds_DGE_results_CTC_vs_P)
+```
+
+```{r}
+# Subset significant genes for CTC vs P
+resSig_CTC_vs_P <- subset(dds_DGE_results_CTC_vs_P, padj < 0.05)
+resSig_CTC_vs_P <- resSig_CTC_vs_P[order(resSig_CTC_vs_P$padj), ]
+
+resSig_CTC_vs_P$symbol <- mapIds(org.Mm.eg.db,
+                                keys = rownames(resSig_CTC_vs_P),
+                                column = "SYMBOL",
+                                keytype = "ENSEMBL",
+                                multiVals = "first")
+
+head(resSig_CTC_vs_P)
+```
+
+
+```{r}
+# Strongest downregulated genes (lowest log2 fold change)
+head(resSig_CTC_vs_P[order(resSig_CTC_vs_P$log2FoldChange), ])
+```
+
+
+```{r}
+# Strongest upregulated genes (highest log2 fold change)
+head(resSig_CTC_vs_P[order(resSig_CTC_vs_P$log2FoldChange, decreasing = TRUE), ])
+```
+
+
+
+```{r}
+# Export the significant results to a file
+#write.table(resSig_CTC_vs_P, file = "LLC_padj01_Significant_Results_CTC_vs_P.txt", sep = "\t", quote = FALSE, row.names = TRUE)
+```
+
+
+3) L vs P
+```{r}
+dds_DGE_results_L_vs_P <- results(dds_DGE, contrast = c("group","L","P"))
+head(dds_DGE_results_L_vs_P)
+summary(dds_DGE_results_L_vs_P)
+```
+
+
+```{r}
+# Subset significant genes for L vs P
+resSig_L_vs_P <- subset(dds_DGE_results_L_vs_P, padj < 0.05)
+resSig_L_vs_P <- resSig_L_vs_P[order(resSig_L_vs_P$padj), ]
+
+resSig_L_vs_P$symbol <- mapIds(org.Mm.eg.db,
+                                keys = rownames(resSig_L_vs_P),
+                                column = "SYMBOL",
+                                keytype = "ENSEMBL",
+                                multiVals = "first")
+
+head(resSig_L_vs_P)
+```
+
+
+```{r}
+# Strongest downregulated genes (lowest log2 fold change)
+head(resSig_L_vs_P[order(resSig_L_vs_P$log2FoldChange), ])
+```
+
+
+```{r}
+# Strongest upregulated genes (highest log2 fold change)
+head(resSig_L_vs_P[order(resSig_L_vs_P$log2FoldChange, decreasing = TRUE), ])
+```
+
+
+```{r}
+# Export the significant results to a file
+write.table(resSig_L_vs_P, file = "LLC_padj01_Significant_Results_L_vs_P.txt", 
+            sep = "\t", quote = FALSE, row.names = TRUE)
+```
+
+## 4) Exploratory plots
+
+Histogram of p-values for each comparison
+- An enrichment near zero typically indicates many significantly differentially expressed genes
+```{r}
+par(mfrow = c(1, 3))
+
+hist(dds_DGE_results_B_vs_P$pvalue,
+     col = "blue",
+     border = "white",
+     xlab = "",
+     ylab = "Frequency",
+     breaks = seq(0, 1, 0.05),
+     main = "Histogram of p-values (B vs. P)")
+
+hist(dds_DGE_results_CTC_vs_P$pvalue,
+     col = "blue",
+     border = "white",
+     xlab = "",
+     ylab = "Frequency",
+     breaks = seq(0, 1, 0.05),
+     main = "Histogram of p-values (CTC vs. P)")
+
+hist(dds_DGE_results_L_vs_P$pvalue,
+     col = "blue",
+     border = "white",
+     xlab = "",
+     ylab = "Frequency",
+     breaks = seq(0, 1, 0.05),
+     main = "Histogram of p-values (L vs. P)")
+
+```
+
+MA Plot to visualize the log2 fold changes (M) versus the average expression (A)
+
+```{r, message=FALSE, warning=FALSE}
+library(apeglm)
+
+# 1) B vs P
+# Basic MA plot
+plotMA(dds_DGE_results_B_vs_P, alpha = 0.05,
+       main = "B vs. P (Basic MA plot)",
+       ylim = c(-5, 5))
+# Shrunken MA plot
+res_shrunk_B_vs_P <- lfcShrink(dds_DGE, coef = "group_B_vs_P", type = "apeglm")
+plotMA(res_shrunk_B_vs_P, alpha = 0.05,
+       main = "B vs. P (Shrunk MA Plot)",
+       ylim = c(-5, 5))
+
+# 2) CTC vs P
+plotMA(dds_DGE_results_CTC_vs_P, alpha = 0.05,
+       main = "CTC vs. P (Basic)",
+       ylim = c(-5, 5))
+res_shrunk_CTC_vs_P <- lfcShrink(dds_DGE, coef = "group_CTC_vs_P", type = "apeglm")
+plotMA(res_shrunk_CTC_vs_P, alpha = 0.05,
+       main = "CTC vs. P (Shrunk)",
+       ylim = c(-5, 5))
+
+# 3) L vs P
+plotMA(dds_DGE_results_L_vs_P, alpha = 0.05,
+       main = "L vs. P (Basic)",
+       ylim = c(-5, 5))
+res_shrunk_L_vs_P <- lfcShrink(dds_DGE, coef = "group_L_vs_P", type = "apeglm")
+plotMA(res_shrunk_L_vs_P, alpha = 0.05,
+       main = "L vs. P (Shrunk)",
+       ylim = c(-5, 5))
+```
+
+Volcano Plots
+
+```{r, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(ggrepel)
+library(org.Mm.eg.db)
+```
+
+1) B vs P
+
+```{r, warning=FALSE}
+
+
+# Convert your DESeq2 results to a data frame
+results_order_B <- as.data.frame(dds_DGE_results_B_vs_P)
+
+# Add the symbol column (mapping from ENSEMBL to SYMBOL)
+results_order_B$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys      = rownames(results_order_B),  # ENSEMBL gene IDs
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+# Replace padj == 0 with a small number to avoid -Inf in log scale
+results_order_B$padj[results_order_B$padj == 0] <- 1e-300
+
+# Create a -log10(padj) column
+results_order_B$negLog10Padj <- -log10(results_order_B$padj)
+
+
+# Define Up, Down, or Not Sig
+results_order_B$Significance <- "Not Sig"
+results_order_B$Significance[
+  results_order_B$padj < 0.05 & results_order_B$log2FoldChange > 0.38
+] <- "Up"
+results_order_B$Significance[
+  results_order_B$padj < 0.05 & results_order_B$log2FoldChange < -0.38
+] <- "Down"
+
+
+# Create the Volcano Plot
+p_B <- ggplot(results_order_B, aes(x = log2FoldChange, y = negLog10Padj)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8", "Not Sig" = "grey70", "Up" = "firebrick")
+  ) +
+  labs(
+    title = "LLC Brain vs. Parental",
+    x = expression(log[2]~fold~change),
+    y = expression(-log[10]~(padj))
+  ) +
+  theme_minimal(base_size = 14) +  # or theme_bw(base_size = 14)
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  )
+
+# Add dashed lines for log2FC = ±1 and padj = 0.05
+p_B <- p_B +
+  geom_vline(xintercept = c(-0.38, 0.38), color = "blue", linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), color = "blue", linetype = "dashed")
+
+
+# Label the Top Genes
+topGenes_B <- subset(results_order_B, padj < 0.05 & abs(log2FoldChange) > 2)
+# Sort by smallest padj
+topGenes_B <- topGenes_B[order(topGenes_B$padj), ]
+# Take the top 20
+topGenes20_B <- head(topGenes_B, 20)
+
+p_B <- p_B +
+  geom_label_repel(
+    data = topGenes20_B,
+    aes(label = symbol),
+    size = 3,
+    color = "black",
+    fill = "white",
+    box.padding = 0.65,       
+    point.padding = 0.3,     
+    force = 15,               
+    max.overlaps = Inf,      
+    segment.color = "black"
+  )
+
+print(p_B)
+```
+
+
+2) CTC vs P
+```{r, warning=FALSE}
+
+results_order_CTC <- as.data.frame(dds_DGE_results_CTC_vs_P)
+
+results_order_CTC$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys      = rownames(results_order_CTC),  # ENSEMBL gene IDs
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+
+results_order_CTC$padj[results_order_CTC$padj == 0] <- 1e-300
+
+results_order_CTC$negLog10Padj <- -log10(results_order_CTC$padj)
+
+results_order_CTC$Significance <- "Not Sig"
+results_order_CTC$Significance[
+  results_order_CTC$padj < 0.05 & results_order_CTC$log2FoldChange > 0.38
+] <- "Up"
+results_order_CTC$Significance[
+  results_order_CTC$padj < 0.05 & results_order_CTC$log2FoldChange < -0.38
+] <- "Down"
+
+
+p_CTC <- ggplot(results_order_CTC, aes(x = log2FoldChange, y = negLog10Padj)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8", "Not Sig" = "grey70", "Up" = "firebrick")
+  ) +
+  labs(
+    title = "LLC CTC vs. Parental",
+    x = expression(log[2]~fold~change),
+    y = expression(-log[10]~(padj))
+  ) +
+  theme_minimal(base_size = 14) + 
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  )
+
+
+p_CTC <- p_CTC +
+  geom_vline(xintercept = c(-0.38, 0.38), color = "blue", linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), color = "blue", linetype = "dashed")
+
+
+topGenes_CTC <- subset(results_order_CTC, padj < 0.05 & abs(log2FoldChange) > 2)
+
+topGenes_CTC <- topGenes_CTC[order(topGenes_CTC$padj), ]
+
+topGenes20_CTC <- head(topGenes_CTC, 20)
+
+p_CTC <- p_CTC +
+  geom_label_repel(
+    data = topGenes20_CTC,
+    aes(label = symbol),
+    size = 3,
+    color = "black",
+    fill = "white",
+    box.padding = 0.6,       
+    point.padding = 0.3,     
+    force = 15,               
+    max.overlaps = Inf,      
+    segment.color = "black"
+  )
+
+
+print(p_CTC)
+```
+
+3) L vs P
+```{r, warning=FALSE}
+
+results_order_L <- as.data.frame(dds_DGE_results_L_vs_P)
+
+results_order_L$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys      = rownames(results_order_L),  
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+
+results_order_L$padj[results_order_L$padj == 0] <- 1e-300
+
+
+results_order_L$negLog10Padj <- -log10(results_order_L$padj)
+
+
+results_order_L$Significance <- "Not Sig"
+results_order_L$Significance[
+  results_order_L$padj < 0.05 & results_order_L$log2FoldChange > 0.38
+] <- "Up"
+results_order_L$Significance[
+  results_order_L$padj < 0.05 & results_order_L$log2FoldChange < -0.38
+] <- "Down"
+
+
+p_L <- ggplot(results_order_L, aes(x = log2FoldChange, y = negLog10Padj)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8", "Not Sig" = "grey70", "Up" = "firebrick")
+  ) +
+  labs(
+    title = "LLC Bone vs. Parental",
+    x = expression(log[2]~fold~change),
+    y = expression(-log[10]~(padj))
+  ) +
+  theme_minimal(base_size = 14) + 
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  )
+
+p_L <- p_L +
+  geom_vline(xintercept = c(-0.38, 0.38), color = "blue", linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), color = "blue", linetype = "dashed")
+
+
+topGenes_L <- subset(results_order_L, padj < 0.05 & abs(log2FoldChange) > 2)
+topGenes_L <- topGenes_L[order(topGenes_L$padj), ]
+topGenes20_L <- head(topGenes_L, 20)
+
+p_L <- p_L +
+  geom_label_repel(
+    data = topGenes20_L,
+    aes(label = symbol),
+    size = 3,
+    color = "black",
+    fill = "white",
+    box.padding = 0.65,       
+    point.padding = 0.3,     
+    force = 15,               
+    max.overlaps = Inf,      
+    segment.color = "black"
+  )
+
+print(p_L)
+```
+
+Heatmap of the top 20 most variable genes from variance-stabilized data
+
+```{r, message=FALSE, warning=FALSE}
+library(pheatmap)
+library(RColorBrewer)
+library(matrixStats)
+```
+
+```{r}
+# 1. Identify the top 20 most variable genes by variance
+topVarGenes <- head(order(rowVars(assay(vsd)), decreasing = TRUE), 20)
+
+# 2. Extract the ENSEMBL IDs for these top genes
+topVar_ensembl_ids <- rownames(assay(vsd))[topVarGenes]
+
+# 3. Subset the VST matrix
+mat <- assay(vsd)[topVar_ensembl_ids, ]
+
+# 4. Convert ENSEMBL IDs to gene symbols
+symbol_map <- mapIds(
+  org.Mm.eg.db,
+  keys = topVar_ensembl_ids,
+  column = "SYMBOL",
+  keytype = "ENSEMBL",
+  multiVals = "first"
+)
+
+# 5. Rename rows of 'mat' with the gene symbols
+rownames(mat) <- symbol_map
+
+# 6. Center each row to emphasize relative expression differences
+mat <- mat - rowMeans(mat)
+
+# 7. Create a data frame for column annotation (only 'group')
+annotation_col <- as.data.frame(colData(vsd)[, "group", drop = FALSE])
+
+# 8. Choose a color palette
+my_colors <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+
+# 9. Define your exact sample order
+desired_order <- c(
+  "LP1","LP2","LP3",       # Parental
+  "LCTC1","LCTC2","LCTC3", # CTC
+  "LB1","LB2","LB3",       # Brain
+  "LL1","LL2","LL3"        # Limb/Bone
+)
+
+
+mat2           <- mat[, desired_order]
+annotation_col2 <- annotation_col[desired_order, , drop = FALSE]
+
+# 10. heatmap
+pheatmap(
+  mat2,
+  annotation_col = annotation_col,
+  color = my_colors,
+  show_rownames  = TRUE,
+  main = "LLC: Top 20 Most Variable Genes"
+)
+```
+
+Individual HeatMap for B vs P
+```{r}
+# 1. Subset significant genes (padj < 0.05) and sort them by padj
+resSig_B_vs_P <- subset(dds_DGE_results_B_vs_P, padj < 0.05)
+resSig_B_vs_P <- resSig_B_vs_P[order(resSig_B_vs_P$padj), ]
+
+# 2. Select the top 20 significant genes
+top20 <- head(resSig_B_vs_P, 20)
+
+# 3. Map ENSEMBL IDs to gene symbols using org.Mm.eg.db
+top20$symbol <- mapIds(org.Mm.eg.db,
+                       keys = rownames(top20),
+                       column = "SYMBOL",
+                       keytype = "ENSEMBL",
+                       multiVals = "first")
+
+# 4. Subset the variance-stabilized counts matrix for these top genes
+vsd_mat <- assay(vsd)
+top20_ids <- rownames(top20)
+mat <- vsd_mat[top20_ids, ]
+
+# 5. Replace row names with gene symbols for clarity
+rownames(mat) <- top20$symbol
+
+# 6. Restrict the samples (columns) to only those from Parental (P) and B groups.
+samples <- as.data.frame(colData(vsd))
+subset_samples <- rownames(samples)[samples$group %in% c("P", "B")]
+mat_subset <- mat[, subset_samples]
+
+# 7.Center the rows (subtract the row mean) for better visualization.
+mat_centered <- mat_subset - rowMeans(mat_subset)
+
+# 8. Create column annotation (using only "group")
+annotation_col <- as.data.frame(colData(vsd)[subset_samples, "group", drop = FALSE])
+
+# 9. Define a color palette for the heatmap
+desired_order <- c(
+  "LP1","LP2","LP3",  # Parental
+  "LB1","LB2","LB3"   # Brain
+)
+
+mat2           <- mat_centered[, desired_order]
+annotation_col2 <- annotation_col[desired_order, , drop = FALSE]
+
+# 10. Draw the reordered heatmap
+pheatmap(
+  mat2,
+  annotation_col = annotation_col,
+  color = my_colors,
+  cluster_cols      = FALSE,    # ← preserves your desired_order
+  show_rownames     = TRUE,
+  main              = "LLC Brain vs Parental: Top 20 DEGs"
+)
+```
+
+
+Individual HeatMap for L vs P
+```{r}
+# 1. Subset significant genes (padj < 0.05) and sort them by padj for L vs. P
+resSig_L_vs_P <- subset(dds_DGE_results_L_vs_P, padj < 0.05)
+resSig_L_vs_P <- resSig_L_vs_P[order(resSig_L_vs_P$padj), ]
+
+# 2. Select the top 20 significant genes
+top20 <- head(resSig_L_vs_P, 20)
+
+# 3. Map ENSEMBL IDs to gene symbols using org.Mm.eg.db
+top20$symbol <- mapIds(org.Mm.eg.db,
+                       keys = rownames(top20),
+                       column = "SYMBOL",
+                       keytype = "ENSEMBL",
+                       multiVals = "first")
+
+# 4. Subset the variance-stabilized counts matrix for these top genes
+vsd_mat <- assay(vsd)
+top20_ids <- rownames(top20)
+mat <- vsd_mat[top20_ids, ]
+
+# 5. Replace row names with gene symbols for clarity
+rownames(mat) <- top20$symbol
+
+# 6. Restrict the samples (columns) to only those from Parental (P) and L groups.
+samples <- as.data.frame(colData(vsd))
+subset_samples <- rownames(samples)[samples$group %in% c("P", "L")]
+mat_subset <- mat[, subset_samples]
+
+# 7. Center the rows (subtract the row mean) for better visualization.
+mat_centered <- mat_subset - rowMeans(mat_subset)
+
+# 8. Create column annotation (using only "group")
+annotation_col <- as.data.frame(colData(vsd)[subset_samples, "group", drop = FALSE])
+
+# 9. Define a color palette for the heatmap
+my_colors <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+
+# 10. Define the order of the samples
+desired_order <- c(
+  "LP1","LP2","LP3",   # Parental samples
+  "LL1","LL2","LL3"    # Limb samples
+)
+
+mat2            <- mat_centered[, desired_order]
+annotation_col2 <- annotation_col[desired_order, , drop = FALSE]
+
+# 10. Draw the heatmap using pheatmap
+pheatmap(mat2,
+         annotation_col = annotation_col2,
+         color = my_colors,
+         cluster_cols = FALSE,
+         main = "LLC Limb vs. Parental",
+         show_rownames = TRUE)
+```
+
+Individual HeatMap for CTC vs P
+```{r, message=FALSE, warning=FALSE}
+# 1. Subset significant genes (padj < 0.05) and sort them by padj for CTC vs. P
+resSig_CTC_vs_P <- subset(dds_DGE_results_CTC_vs_P, padj < 0.05)
+resSig_CTC_vs_P <- resSig_CTC_vs_P[order(resSig_CTC_vs_P$padj), ]
+
+# 2. Select the top 20 significant genes
+top20 <- head(resSig_CTC_vs_P, 20)
+
+# 3. Map ENSEMBL IDs to gene symbols using org.Mm.eg.db
+top20$symbol <- mapIds(org.Mm.eg.db,
+                       keys = rownames(top20),
+                       column = "SYMBOL",
+                       keytype = "ENSEMBL",
+                       multiVals = "first")
+
+# 4. Subset the variance-stabilized counts matrix for these top genes
+vsd_mat <- assay(vsd)
+top20_ids <- rownames(top20)
+mat <- vsd_mat[top20_ids, ]
+
+# 5. Replace row names with gene symbols for clarity
+rownames(mat) <- top20$symbol
+
+# 6. Restrict the samples (columns) to only those from Parental (P) and CTC groups.
+samples <- as.data.frame(colData(vsd))
+subset_samples <- rownames(samples)[samples$group %in% c("P", "CTC")]
+mat_subset <- mat[, subset_samples]
+
+# 7. Center the rows (subtract the row mean) for better visualization.
+mat_centered <- mat_subset - rowMeans(mat_subset)
+
+# 8. Create column annotation (using only "group")
+annotation_col <- as.data.frame(colData(vsd)[subset_samples, "group", drop = FALSE])
+
+# 9. Define a color palette for the heatmap
+my_colors <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+
+# 10. Order the samples
+desired_order <- c(
+  "LP1","LP2","LP3",       # Parental
+  "LCTC1","LCTC2","LCTC3"  # CTC
+)
+
+mat2            <- mat_centered[, desired_order]
+annotation_col2 <- annotation_col[desired_order, , drop = FALSE]
+
+
+# 11. Draw the heatmap 
+pheatmap(
+  mat2,
+  annotation_col    = annotation_col2,
+  color             = my_colors,
+  cluster_cols      = FALSE,   
+  show_rownames     = TRUE,
+  main              = "LLC CTC vs Parental: Top 20 DEGs"
+)
+```
+
+
+## 5) Annotate Results
+
+```{r, message=FALSE, warning=FALSE}
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+library(clusterProfiler)
+library(enrichplot)
+library(DOSE)
+library(cowplot)
+library(dplyr)
+library(ggrepel)
+```
+
+
+1) For CTC vs P
+```{r}
+# Annotate resSig_CTC_vs_P with gene symbol, gene name, and ENTREZ ID
+resSig_CTC_vs_P$symbol <- mapIds(org.Mm.eg.db,
+                                 keys = rownames(resSig_CTC_vs_P),
+                                 column = "SYMBOL",
+                                 keytype = "ENSEMBL",
+                                 multiVals = "first")
+
+resSig_CTC_vs_P$genename <- mapIds(org.Mm.eg.db,
+                                   keys = rownames(resSig_CTC_vs_P),
+                                   column = "GENENAME",
+                                   keytype = "ENSEMBL",
+                                   multiVals = "first")
+
+resSig_CTC_vs_P$entrez <- mapIds(org.Mm.eg.db,
+                                 keys = rownames(resSig_CTC_vs_P),
+                                 column = "ENTREZID",
+                                 keytype = "ENSEMBL",
+                                 multiVals = "first")
+
+# Build a vector of ENTREZ IDs (remove any NAs)
+geneList_CTC <- na.omit(resSig_CTC_vs_P$entrez)
+
+# Perform GO over-representation analysis (can also be for Cellular Compartiment)
+# For Biological Process (BP)
+ego_BP_CTC <- enrichGO(
+  gene          = geneList_CTC,
+  OrgDb         = org.Mm.eg.db,
+  keyType       = "ENTREZID",
+  ont           = "BP",           # change here for BP
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.01,
+  qvalueCutoff  = 0.05,
+  readable      = TRUE
+)
+
+# For Molecular Function (MF)
+ego_MF_CTC <- enrichGO(
+  gene          = geneList_CTC,
+  OrgDb         = org.Mm.eg.db,
+  keyType       = "ENTREZID",
+  ont           = "MF",           # change here for MF
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.01,
+  qvalueCutoff  = 0.05,
+  readable      = TRUE
+)
+
+barplot(ego_BP_CTC, showCategory = 20, title = "GO BP Enrichment (LLC CTC vs P)")
+dotplot(ego_MF_CTC, showCategory = 20, title = "GO MF Enrichment (LLC CTC vs P)")
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+
+## Enrichment maps
+
+# 1) Convert enrichGO results to a "readable" object, so gene IDs become symbols
+
+ego_CC_CTC <- enrichGO(
+  gene          = geneList_CTC,
+  OrgDb         = org.Mm.eg.db,
+  keyType       = "ENTREZID",
+  ont           = "CC",           
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.01,
+  qvalueCutoff  = 0.05,
+  readable      = TRUE
+)
+
+edox_C <- setReadable(ego_CC_CTC, 'org.Mm.eg.db', 'ENTREZID')
+
+# 2) Build a fold-change vector for your genes
+geneList_C <- resSig_CTC_vs_P$log2FoldChange
+names(geneList_C) <- as.character(resSig_CTC_vs_P$entrez)
+geneList_C <- sort(geneList_C, decreasing = TRUE)
+
+p1_C <- cnetplot(
+  edox_C,
+  foldChange   = geneList_C,
+  categorySize = "pvalue",
+  circular     = TRUE,      # <-- ring layout
+  colorEdge    = TRUE       # <-- edges are colored by category
+  # showCategory = 5        # optionally limit the number of categories displayed
+  # node_label  = "gene"    # optionally label gene nodes with symbols
+) + ggtitle("Gene Concept Network (LLC CTC vs P)")
+
+# 4) Create an enrichment map
+edox_C <- pairwise_termsim(edox_C)
+p2_C <- emapplot(edox_C, layout = "kk") +
+  ggtitle("Enrichment Map (LLC CTC vs P)")
+
+# 5) Combine the cnetplot and emapplot side by side
+pdf("LLC_CTCvsP_Enrichment_Networks.pdf", width=25, height=10)
+cowplot::plot_grid(p1_C, p2_C, ncol=2, labels=LETTERS[1:3], rel_widths=c(.8, .8, 1.2))
+dev.off()
+```
+
+
+2) For L vs P
+```{r}
+# Annotate resSig_L_vs_P with gene symbol, gene name, and ENTREZ ID
+resSig_L_vs_P$symbol <- mapIds(org.Mm.eg.db,
+                               keys = rownames(resSig_L_vs_P),
+                               column = "SYMBOL",
+                               keytype = "ENSEMBL",
+                               multiVals = "first")
+
+resSig_L_vs_P$genename <- mapIds(org.Mm.eg.db,
+                                 keys = rownames(resSig_L_vs_P),
+                                 column = "GENENAME",
+                                 keytype = "ENSEMBL",
+                                 multiVals = "first")
+
+resSig_L_vs_P$entrez <- mapIds(org.Mm.eg.db,
+                               keys = rownames(resSig_L_vs_P),
+                               column = "ENTREZID",
+                               keytype = "ENSEMBL",
+                               multiVals = "first")
+
+# Build a vector of ENTREZ IDs (remove any NAs)
+geneList_L <- na.omit(resSig_L_vs_P$entrez)
+
+# Perform GO over-representation analysis (can also be for Cellular Compartiment)
+# For Biological Process (BP)
+ego_BP_L <- enrichGO(
+  gene          = geneList_L,
+  OrgDb         = org.Mm.eg.db,
+  keyType       = "ENTREZID",
+  ont           = "BP",           # change here for BP
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.01,
+  qvalueCutoff  = 0.05,
+  readable      = TRUE
+)
+
+# For Molecular Function (MF)
+ego_MF_L <- enrichGO(
+  gene          = geneList_L,
+  OrgDb         = org.Mm.eg.db,
+  keyType       = "ENTREZID",
+  ont           = "MF",           # change here for MF
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.01,
+  qvalueCutoff  = 0.05,
+  readable      = TRUE
+)
+
+barplot(ego_BP_L, showCategory = 20, title = "GO BP Enrichment (LLC L vs P)")
+dotplot(ego_MF_L, showCategory = 20, title = "GO MF Enrichment (LLC L vs P)")
+```
+
+```{r, message=FALSE, warning=FALSE}
+## Enrichment maps for L vs P
+
+# 1) Convert enrichGO results (ego_L) to a "readable" object, so gene IDs become symbols
+
+ego_CC_L <- enrichGO(
+  gene          = geneList_L,
+  OrgDb         = org.Mm.eg.db,
+  keyType       = "ENTREZID",
+  ont           = "CC",           
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.01,
+  qvalueCutoff  = 0.05,
+  readable      = TRUE
+)
+
+edox_L <- setReadable(ego_CC_L, 'org.Mm.eg.db', 'ENTREZID')
+
+# 2) Build a fold-change vector for your genes using the L vs P significant results
+geneList_L <- resSig_L_vs_P$log2FoldChange
+names(geneList_L) <- as.character(resSig_L_vs_P$entrez)
+geneList_L <- sort(geneList_L, decreasing = TRUE)
+
+p1_L <- cnetplot(
+  edox_L,
+  foldChange   = geneList_L,
+  categorySize = "pvalue",
+  circular     = TRUE,  # ring layout
+  colorEdge    = TRUE   # edges colored by category
+  # Optionally, add: showCategory = 5, node_label = "gene"
+) + ggtitle("Gene Concept Network (LLC L vs P)")
+
+# 4) Create an enrichment map
+edox_L <- pairwise_termsim(edox_L)
+p2_L <- emapplot(edox_L, layout = "kk") +
+  ggtitle("Enrichment Map (LLC L vs P)")
+
+# 5) Combine the cnetplot and emapplot side by side in a PDF
+pdf("LLC_LvsP_Enrichment_Networks.pdf", width = 25, height = 10)
+cowplot::plot_grid(p1_L, p2_L, ncol = 2, labels = LETTERS[1:3], rel_widths = c(.8, .8, 1.2))
+dev.off()
+```
+
+
+
+3) For B vs P
+```{r}
+# Annotate resSig_B_vs_P with gene symbol, gene name, and ENTREZ ID
+resSig_B_vs_P$symbol <- mapIds(org.Mm.eg.db,
+                                keys = rownames(resSig_B_vs_P),
+                                column = "SYMBOL",
+                                keytype = "ENSEMBL",
+                                multiVals = "first")
+
+resSig_B_vs_P$genename <- mapIds(org.Mm.eg.db,
+                                  keys = rownames(resSig_B_vs_P),
+                                  column = "GENENAME",
+                                  keytype = "ENSEMBL",
+                                  multiVals = "first")
+
+resSig_B_vs_P$entrez <- mapIds(org.Mm.eg.db,
+                                keys = rownames(resSig_B_vs_P),
+                                column = "ENTREZID",
+                                keytype = "ENSEMBL",
+                                multiVals = "first")
+
+# Build a vector of ENTREZ IDs (remove any NAs)
+geneList_B <- na.omit(resSig_B_vs_P$entrez)
+
+# Perform GO over-representation analysis (can also be for Cellular Compartiment)
+# For Biological Process (BP)
+ego_BP_B <- enrichGO(
+  gene          = geneList_B,
+  OrgDb         = org.Mm.eg.db,
+  keyType       = "ENTREZID",
+  ont           = "BP",           # change here for BP
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.01,
+  qvalueCutoff  = 0.05,
+  readable      = TRUE
+)
+
+# For Molecular Function (MF)
+ego_MF_B <- enrichGO(
+  gene          = geneList_B,
+  OrgDb         = org.Mm.eg.db,
+  keyType       = "ENTREZID",
+  ont           = "MF",           # change here for MF
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.01,
+  qvalueCutoff  = 0.05,
+  readable      = TRUE
+)
+
+barplot(ego_BP_B, showCategory = 20, title = "GO BP Enrichment (LLC B vs P)")
+dotplot(ego_MF_B, showCategory = 20, title = "GO MF Enrichment (LLC B vs P)")
+```
+
+```{r}
+## Enrichment maps
+
+# 1) Convert enrichGO results (ego_B) to a "readable" object, so gene IDs become symbols
+
+ego_CC_B <- enrichGO(
+  gene          = geneList_B,
+  OrgDb         = org.Mm.eg.db,
+  keyType       = "ENTREZID",
+  ont           = "CC",           
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.01,
+  qvalueCutoff  = 0.05,
+  readable      = TRUE
+)
+
+edox_B <- setReadable(ego_CC_B, 'org.Mm.eg.db', 'ENTREZID')
+
+# 2) Build a fold-change vector for your genes
+geneList_B <- resSig_B_vs_P$log2FoldChange
+names(geneList_B) <- as.character(resSig_B_vs_P$entrez)
+geneList_B <- sort(geneList_B, decreasing = TRUE)
+
+p1_B <- cnetplot(
+  edox_B,
+  foldChange   = geneList_B,
+  categorySize = "pvalue",
+  circular     = TRUE,  # ring layout
+  colorEdge    = TRUE   # edges colored by category
+  # showCategory = 5,    # optionally limit the number of categories displayed
+  # node_label  = "gene" # optionally label gene nodes with symbols
+) + ggtitle("Gene Concept Network (LLC B vs P)")
+
+# 4) Create an enrichment map
+edox_B <- pairwise_termsim(edox_B)
+p2_B <- emapplot(edox_B, layout = "kk") +
+  ggtitle("Enrichment Map (LLC B vs P)")
+
+# 5) Combine the cnetplot and emapplot side by side in a PDF
+pdf("LLC BvsP_Enrichment_Networks.pdf", width = 25, height = 10)
+cowplot::plot_grid(p1_B, p2_B, ncol = 2, labels = LETTERS[1:3], rel_widths = c(.8, .8, 1.2))
+dev.off()
+```
+
+### For metastatic cell line comparison: B vs L
+
+```{r}
+dds_DGE_results_B_vs_L <- results(
+  dds_DGE,
+  contrast = c("group", "B", "L")  
+)
+
+head(dds_DGE_results_B_vs_L)
+summary(dds_DGE_results_B_vs_L)
+```
+
+
+```{r}
+# Subset Significant Genes (padj < 0.05) for B vs L
+resSig_B_vs_L <- subset(dds_DGE_results_B_vs_L, padj < 0.05)
+resSig_B_vs_L <- resSig_B_vs_L[order(resSig_B_vs_L$padj), ]
+
+# Add a 'symbol' column (mapping ENSEMBL to gene SYMBOL)
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+
+resSig_B_vs_L$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys      = rownames(resSig_B_vs_L),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+head(resSig_B_vs_L)
+```
+
+
+```{r}
+# Strongest Up/Down-Regulated Genes for B vs L
+head(resSig_B_vs_L[order(resSig_B_vs_L$log2FoldChange), ])
+
+# Strongest upregulated genes (highest log2 fold change)
+head(resSig_B_vs_L[order(resSig_B_vs_L$log2FoldChange, decreasing = TRUE), ])
+
+# Export Significant Results
+# write.table(
+#   resSig_B_vs_L,
+#   file = "LLC_padj05_Significant_Results_B_vs_L.txt",
+#   sep = "\t",
+#   quote = FALSE,
+#   row.names = TRUE
+# )
+```
+
+
+```{r}
+# Histogram of p-values (B vs. L)
+hist(
+  dds_DGE_results_B_vs_L$pvalue,
+  col = "blue",
+  border = "white",
+  xlab = "",
+  ylab = "Frequency",
+  breaks = seq(0, 1, 0.05),
+  main = "Histogram of p-values (B vs. L)"
+)
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+dds$group <- relevel(dds$group, ref = "L")
+dds_DGE <- DESeq(dds)
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+# MA Plots (Basic and Shrunk)
+
+# 1) Basic MA plot
+plotMA(
+  dds_DGE_results_B_vs_L,
+  alpha = 0.05,
+  main  = "B vs. L (Basic MA plot)",
+  ylim  = c(-5, 5)
+)
+
+# 2) Shrunken MA plot using apeglm
+res_shrink_B_vs_L <- lfcShrink(
+  dds_DGE,
+  coef = "group_B_vs_L",
+  type = "apeglm"
+)
+plotMA(res_shrink_B_vs_L, alpha = 0.05,
+       main = "B vs. L (Shrunk)",
+       ylim = c(-5, 5))
+
+```
+volcano plot Brain vs Bone
+
+```{r, warning=FALSE}
+
+results_order_B_vs_L <- as.data.frame(dds_DGE_results_B_vs_L)
+
+results_order_B_vs_L$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys      = rownames(results_order_B_vs_L),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+
+results_order_B_vs_L$padj[results_order_B_vs_L$padj == 0] <- 1e-300
+
+
+results_order_B_vs_L$negLog10Padj <- -log10(results_order_B_vs_L$padj)
+
+
+results_order_B_vs_L$Significance <- "Not Sig"
+results_order_B_vs_L$Significance[
+  results_order_B_vs_L$padj < 0.05 & results_order_B_vs_L$log2FoldChange > 0.38
+] <- "Up"
+results_order_B_vs_L$Significance[
+  results_order_B_vs_L$padj < 0.05 & results_order_B_vs_L$log2FoldChange < -0.38
+] <- "Down"
+
+
+p_B_vs_L <- ggplot(results_order_B_vs_L, aes(x = log2FoldChange, y = negLog10Padj)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8", "Not Sig" = "grey70", "Up" = "firebrick")
+  ) +
+  labs(
+    title = "LLC Metastatic Lines: Brain vs. Bone",
+    x = expression(log[2]~fold~change),
+    y = expression(-log[10]~(padj))
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  )
+
+p_B_vs_L <- p_B_vs_L +
+  geom_vline(xintercept = c(-0.38, 0.38), color = "blue", linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), color = "blue", linetype = "dashed")
+
+
+topGenes_B_vs_L <- subset(
+  results_order_B_vs_L,
+  padj < 0.05 & abs(log2FoldChange) > 2
+)
+
+
+topGenes_B_vs_L <- topGenes_B_vs_L[order(topGenes_B_vs_L$padj), ]
+topGenes20_B_vs_L <- head(topGenes_B_vs_L, 20)
+
+p_B_vs_L <- p_B_vs_L +
+  geom_label_repel(
+    data = topGenes20_B_vs_L,
+    aes(label = symbol),
+    size = 3,
+    color = "black",
+    fill = "white",
+    box.padding = 0.65,
+    point.padding = 0.3,
+    force = 15,
+    max.overlaps = Inf,
+    segment.color = "black"
+  )
+
+print(p_B_vs_L)
+```
+
+
+```{r}
+# Individual Heatmap for B vs. L of the top 20 most significant genes (by padj)
+
+# 1. Subset significant genes (padj < 0.05) and sort by padj
+resSig_B_vs_L <- subset(dds_DGE_results_B_vs_L, padj < 0.05)
+resSig_B_vs_L <- resSig_B_vs_L[order(resSig_B_vs_L$padj), ]
+
+# 2. Select the top 20 significant genes
+top20_B_vs_L <- head(resSig_B_vs_L, 20)
+
+# 3. Map ENSEMBL IDs to gene symbols
+top20_B_vs_L$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys      = rownames(top20_B_vs_L),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+# 4. Subset the variance-stabilized counts matrix for these top genes
+vsd_mat <- assay(vsd)
+top20_ids <- rownames(top20_B_vs_L)
+mat_B_vs_L <- vsd_mat[top20_ids, ]
+
+# 5. Replace row names with gene symbols
+rownames(mat_B_vs_L) <- top20_B_vs_L$symbol
+
+# 6. Restrict columns (samples) if you only want L and B groups
+samples <- as.data.frame(colData(vsd))
+subset_samples <- rownames(samples)[samples$group %in% c("L", "B")]
+mat_subset_B_vs_L <- mat_B_vs_L[, subset_samples]
+
+# 7. Center rows for better visualization
+mat_centered_B_vs_L <- mat_subset_B_vs_L - rowMeans(mat_subset_B_vs_L)
+
+# 8. Build your annotation df as you already have:
+annotation_col <- data.frame(group = samples[subset_samples, "group"],
+                             row.names = subset_samples)
+
+# 9. Define exactly the column order you want:
+desired_order <- c(
+  "LB1","LB2","LB3",   # Brain
+  "LL1","LL2","LL3"    # Limb
+)
+
+mat2            <- mat_centered_B_vs_L[, desired_order]
+annotation_col2 <- annotation_col[desired_order, , drop = FALSE]
+
+
+# 10. Draw the reordered heatmap without re-clustering columns
+pheatmap(
+  mat2,
+  annotation_col    = annotation_col2,
+  color             = my_colors,
+  cluster_cols      = FALSE,   
+  show_rownames     = TRUE,
+  main              = "LLC Metastasic Lines Brain vs Limb: Top 20 DEGs"
+)
+```
+
+
+```{r}
+# Annotate resSig_B_vs_L with gene symbol, gene name, and ENTREZ ID
+resSig_B_vs_L$symbol <- mapIds(org.Mm.eg.db,
+                                keys = rownames(resSig_B_vs_L),
+                                column = "SYMBOL",
+                                keytype = "ENSEMBL",
+                                multiVals = "first")
+
+resSig_B_vs_L$genename <- mapIds(org.Mm.eg.db,
+                                  keys = rownames(resSig_B_vs_L),
+                                  column = "GENENAME",
+                                  keytype = "ENSEMBL",
+                                  multiVals = "first")
+
+resSig_B_vs_L$entrez <- mapIds(org.Mm.eg.db,
+                                keys = rownames(resSig_B_vs_L),
+                                column = "ENTREZID",
+                                keytype = "ENSEMBL",
+                                multiVals = "first")
+
+# Build a vector of ENTREZ IDs (remove any NAs)
+geneList_B_vs_L <- na.omit(resSig_B_vs_L$entrez)
+
+# Perform GO over-representation analysis for Biological Process (BP)
+ego_BP_B_vs_L <- enrichGO(
+  gene          = geneList_B_vs_L,
+  OrgDb         = org.Mm.eg.db,
+  keyType       = "ENTREZID",
+  ont           = "BP",           # Biological Process
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.01,
+  qvalueCutoff  = 0.05,
+  readable      = TRUE
+)
+
+# For Molecular Function (MF)
+ego_MF_B_vs_L <- enrichGO(
+  gene          = geneList_B_vs_L,
+  OrgDb         = org.Mm.eg.db,
+  keyType       = "ENTREZID",
+  ont           = "MF",           # Molecular Function
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.01,
+  qvalueCutoff  = 0.05,
+  readable      = TRUE
+)
+
+# Plot the enrichment results
+barplot(ego_BP_B_vs_L, showCategory = 20, title = "GO BP Enrichment (LLC Met B vs L)")
+dotplot(ego_MF_B_vs_L, showCategory = 20, title = "GO MF Enrichment (LLC Met B vs L)")
+```
+
+```{r}
+## Enrichment maps
+
+# 1) Convert enrichGO results for Cellular Component (CC) to a "readable" object
+ego_CC_B_vs_L <- enrichGO(
+  gene          = geneList_B_vs_L,
+  OrgDb         = org.Mm.eg.db,
+  keyType       = "ENTREZID",
+  ont           = "CC",           # Cellular Component
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.01,
+  qvalueCutoff  = 0.05,
+  readable      = TRUE
+)
+
+edox_B_vs_L <- setReadable(ego_CC_B_vs_L, 'org.Mm.eg.db', 'ENTREZID')
+
+# 2) Build a fold-change vector for your genes
+geneList_fc_B_vs_L <- resSig_B_vs_L$log2FoldChange
+names(geneList_fc_B_vs_L) <- as.character(resSig_B_vs_L$entrez)
+geneList_fc_B_vs_L <- sort(geneList_fc_B_vs_L, decreasing = TRUE)
+
+# 3) Create a Gene Concept Network plot (cnetplot)
+p1_B_vs_L <- cnetplot(
+  edox_B_vs_L,
+  foldChange   = geneList_fc_B_vs_L,
+  categorySize = "pvalue",
+  circular     = TRUE,  # ring layout
+  colorEdge    = TRUE   # edges colored by category
+  # Optionally, you can restrict the number of categories displayed or label nodes
+) + ggtitle("Gene Concept Network (LLC B vs L)")
+
+# 4) Create an enrichment map
+edox_B_vs_L <- pairwise_termsim(edox_B_vs_L)
+p2_B_vs_L <- emapplot(edox_B_vs_L, layout = "kk") +
+  ggtitle("Enrichment Map (LLC B vs L)")
+
+# 5) Combine the cnetplot and emapplot side by side in a PDF
+pdf("LLC_BvsL_Enrichment_Networks.pdf", width = 25, height = 10)
+cowplot::plot_grid(p1_B_vs_L, p2_B_vs_L, ncol = 2, labels = LETTERS[1:3], 
+                   rel_widths = c(.8, .8, 1.2))
+dev.off()
+```
+
+Heatmap with kmeans
+
+```{r}
+# Get the union of gene IDs from all contrasts
+top_gene_ids <- unique(c(rownames(topGenes_CTC), rownames(topGenes_L), rownames(topGenes_B), rownames(topGenes_B_vs_L)))
+top_gene_ids <- top_gene_ids[!is.na(top_gene_ids)]
+```
+
+```{r}
+common_ids <- intersect(top_gene_ids, rownames(vsd_norm_counts))
+length(common_ids)
+```
+
+```{r}
+vsd_mat_subset <- vsd_norm_counts[common_ids, ]
+# This step normalizes each gene’s values across samples to mean=0, sd=1, so that clustering focuses on expression patterns rather than magnitude.
+vsd_mat_subset_scaled <- t(scale(t(vsd_mat_subset)))
+# Remove rows that become NA (e.g., zero variance)
+vsd_mat_subset_scaled <- vsd_mat_subset_scaled[complete.cases(vsd_mat_subset_scaled), ]
+```
+
+```{r}
+# k-means Clustering
+k <- 4 # choose how many clusters (k) you want to group your genes into
+kmeans_result <- kmeans(vsd_mat_subset_scaled, centers = k)
+# Extract the cluster assignments (which cluster each gene belongs to)
+clusters <- kmeans_result$cluster
+```
+
+```{r}
+# Reorder Rows by Cluster for Heatmap: groups genes by their assigned cluster in the final heatmap
+gene_order <- order(clusters)
+vsd_mat_subset_scaled <- vsd_mat_subset_scaled[gene_order, ]
+clusters_ordered <- clusters[gene_order]
+# Create Row Annotation to Show Cluster Membership
+row_annot <- data.frame(Cluster = factor(clusters_ordered))
+rownames(row_annot) <- rownames(vsd_mat_subset_scaled)
+```
+
+```{r}
+my_colors <- colorRampPalette(c("green", "black", "red"))(100)
+# Plot the Heatmap
+pheatmap(
+  vsd_mat_subset_scaled,
+  cluster_rows = FALSE,         # preserve k-means ordering
+  cluster_cols = TRUE,          # cluster the samples
+  show_rownames = FALSE,        # often too many genes to display
+  annotation_row = row_annot,   # shows cluster membership
+  scale = "none",               # already scaled the data
+  color = my_colors,            # custom color palette
+  main = "LLC K-means Heatmap (VST)"
+)
+```
+
+Study each cluster
+```{r}
+library(ggplot2)
+library(clusterProfiler)
+library(org.Mm.eg.db)  
+library(reshape2)
+```
+
+```{r}
+# Create an output folder for plots if it doesn't already exist
+if (!dir.exists("LLC_output_plots")) {
+  dir.create("LLC_output_plots")
+}
+
+# Extract Gene Lists by Cluster
+cluster_list <- split(rownames(vsd_mat_subset_scaled), clusters)  # 'clusters' is a named vector with cluster assignments
+
+for (clust in names(cluster_list)) {
+  
+  # Extract Gene List
+  gene_list <- cluster_list[[clust]]
+  cat("Cluster", clust, "contains", length(gene_list), "genes\n")
+  
+  write.table(gene_list, file = paste0("LLC_Cluster_", clust, "_genes.txt"), 
+              quote = FALSE, row.names = FALSE, col.names = FALSE)
+  
+  # Extract the expression matrix for genes in this cluster
+  cluster_expr <- vsd_mat_subset_scaled[gene_list, ]
+  
+  # Compute the average expression for each sample across these genes
+  avg_expr <- colMeans(cluster_expr)
+  
+  # Create a data frame for plotting
+  plot_df <- data.frame(Sample = colnames(cluster_expr), 
+                        Expression = avg_expr)
+  
+  # Optionally, order samples if needed (e.g., factor levels)
+  plot_df$Sample <- factor(plot_df$Sample, levels = colnames(cluster_expr))
+  
+  # Plot the average expression as a line plot using ggplot2
+  p <- ggplot(plot_df, aes(x = Sample, y = Expression, group = 1)) +
+    geom_line(color = "blue") +
+    geom_point(color = "red", size = 2) +
+    ggtitle(paste("Average Expression Profile for Cluster", clust)) +
+    xlab("Samples") + ylab("Average VST Expression") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  # Save the plot to a file using png() device
+  png(filename = paste0("LLC_output_plots/LLC_Cluster_", clust, "_profile.png"),
+      width = 800, height = 600)
+  print(p)
+  dev.off()
+  
+  # Functional Analysis using clusterProfiler
+  # Convert Ensembl IDs to Entrez IDs using bitr (adjust keyType if needed)
+  eg <- bitr(gene_list, fromType = "ENSEMBL", 
+             toType = "ENTREZID", OrgDb = org.Mm.eg.db)
+  
+  # Check if conversion returned any results
+  if (nrow(eg) > 0) {
+    # Perform Gene Ontology (GO) enrichment analysis for Biological Process (BP)
+    ego <- enrichGO(gene         = eg$ENTREZID,
+                    OrgDb        = org.Mm.eg.db,
+                    keyType      = "ENTREZID",
+                    ont          = "BP",
+                    pAdjustMethod = "BH",
+                    qvalueCutoff = 0.05,
+                    readable     = TRUE)
+    
+    # Print top enriched GO terms (if any)
+    cat("GO enrichment results for Cluster", clust, ":\n")
+    print(head(ego))
+    
+    # Plot a dotplot of enriched GO terms (showing top 10)
+    dp <- dotplot(ego, showCategory = 10) + 
+      ggtitle(paste("GO Enrichment for Cluster", clust))
+    
+    # Save the dotplot as well
+    png(filename = paste0("LLC_output_plots/LLC_Cluster_", clust, "_GO_enrichment.png"),
+        width = 800, height = 600)
+    print(dp)
+    dev.off()
+    
+  } else {
+    cat("No Entrez ID mapping found for genes in Cluster", clust, "\n")
+  }
+  
+  cat("---------------------------------------------------------\n")
+}
+  
+```
+
+
+```{r}
+devtools::session_info()
+```
+

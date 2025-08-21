@@ -1,0 +1,245 @@
+---
+title: "Proteómica"
+author: "Covadonga Rodríguez Suárez"
+date: "2025-03-11"
+output: html_document
+---
+
+```{r, message=FALSE, warning=FALSE}
+library(DESeq2)
+library(ggplot2)
+```
+
+```{r}
+proteomicaA549 <- read_excel("320_Final_report_HumanCelllines_v2.xlsx")
+```
+
+```{r}
+library(pheatmap)
+
+intensity_cols <- c("AAG1","AAG2","AAG3","AAG4",
+                    "ACTC1","ACTC2","ACTC3","ACTC4",
+                    "AL1","AL2","AL3","AL4",
+                    "AP1","AP2","AP3","AP4")
+
+# Convert those columns to a matrix
+mat <- as.matrix(proteomicaA549[, intensity_cols])
+
+# Use Gene column as row names (if available)
+rownames(mat) <- proteomicaA549$Gene
+
+# Create a color palette: green -> black -> red
+my_colors <- colorRampPalette(c("green", "black", "red"))(100)
+
+# Plot heatmap
+pheatmap(
+  mat,
+  scale = "row",  # z-score per row
+  clustering_distance_rows = "euclidean",
+  clustering_distance_cols = "euclidean",
+  clustering_method = "complete",
+  show_rownames = FALSE,
+  show_colnames = TRUE,
+  color = my_colors
+)
+```
+
+
+```{r}
+# Load libraries
+library(ggplot2)
+library(ggrepel)  # for geom_label_repel
+
+# 1) Assign your columns to simpler names for convenience
+proteomicaA549$log2FC        <- proteomicaA549$`Log2 FoldChange CTC_PARENTAL`
+proteomicaA549$negLog10pval  <- proteomicaA549$`-Log p-value CTC_PARENTAL`
+proteomicaA549$pval          <- proteomicaA549$`p-value CTC_PARENTAL`   
+proteomicaA549$Gene          <- proteomicaA549$Gene                    
+
+# 2) Define a “Significance” column based on log2FC and p-value
+proteomicaA549$Significance <- "Not Sig"
+proteomicaA549$Significance[proteomicaA549$log2FC >= 0.38  & proteomicaA549$pval < 0.05] <- "Up"
+proteomicaA549$Significance[proteomicaA549$log2FC <= -0.38 & proteomicaA549$pval < 0.05] <- "Down"
+
+# 3) Make the volcano plot
+p_CTC <- ggplot(proteomicaA549, aes(x = log2FC, y = negLog10pval, color = Significance)) +
+  geom_point(alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8", "Not Sig" = "grey70", "Up" = "firebrick")
+  ) +
+  labs(
+    title = "A549: CTC vs. Parental",
+    x = expression(log[2]~fold~change),
+    y = expression(-log[10]~pvalue)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  )
+
+# 4) Add dashed lines for log2FC=±1 and p=0.05 
+p_CTC <- p_CTC +
+  geom_vline(xintercept = c(-0.38, 0.38), color = "blue", linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), color = "blue", linetype = "dashed")
+
+# 5) Label the top 20 most significant genes
+topGenes <- subset(proteomicaA549, pval < 0.05 & abs(log2FC) > 2)
+topGenes <- topGenes[order(topGenes$pval), ]  
+topGenes20 <- head(topGenes, 20)
+
+p_CTC <- p_CTC +
+  geom_label_repel(
+    data = topGenes20,
+    aes(label = Gene),
+    size = 3,
+    color = "black",
+    fill = "white",
+    box.padding  = 0.65,
+    point.padding = 0.3,
+    force = 8,
+    max.overlaps = Inf,
+    segment.color = "black"
+  )
+
+# 6) Print or save the final plot
+print(p_CTC)
+```
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+
+# 1) Assign your MET AG_PARENTAL columns to simpler names
+proteomicaA549$log2FC_MET_AG  <- proteomicaA549$`Log2 FoldChange MET AG_PARENTAL`
+proteomicaA549$negLogP_MET_AG <- proteomicaA549$`-Log p-value MET AG_PARENTAL`
+proteomicaA549$pval_MET_AG    <- proteomicaA549$`p-value MET AG_PARENTAL`
+proteomicaA549$Gene           <- proteomicaA549$Gene  # Gene/protein identifier
+
+# 2) Define “Significance” based on log2FC and p-value (using ±0.38 cutoff, p < 0.05)
+proteomicaA549$Significance_MET_AG <- "Not Sig"
+proteomicaA549$Significance_MET_AG[
+  proteomicaA549$log2FC_MET_AG >= 0.38 & proteomicaA549$pval_MET_AG < 0.05
+] <- "Up"
+proteomicaA549$Significance_MET_AG[
+  proteomicaA549$log2FC_MET_AG <= -0.38 & proteomicaA549$pval_MET_AG < 0.05
+] <- "Down"
+
+# 3) Build the volcano plot
+p_MET_AG <- ggplot(
+  proteomicaA549,
+  aes(x = log2FC_MET_AG, y = negLogP_MET_AG, color = Significance_MET_AG)
+) +
+  geom_point(alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8", "Not Sig" = "grey70", "Up" = "firebrick")
+  ) +
+  labs(
+    title = "A549: Adrenal Gland vs. Parental",
+    x = expression(log[2]~fold~change),
+    y = expression(-log[10]~pvalue)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  )
+
+# 4) Add dashed lines for log2FC=±0.38 and p=0.05 
+p_MET_AG <- p_MET_AG +
+  geom_vline(xintercept = c(-0.38, 0.38), color = "blue", linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05),   color = "blue", linetype = "dashed")
+
+# 5) Label the top 20 most significant genes
+topGenes_MET_AG <- subset(proteomicaA549, pval_MET_AG < 0.05 & abs(log2FC_MET_AG) > 2)
+topGenes_MET_AG <- topGenes_MET_AG[order(topGenes_MET_AG$pval_MET_AG), ]  # sort by ascending p-value
+topGenes20_MET_AG <- head(topGenes_MET_AG, 20)
+
+p_MET_AG <- p_MET_AG +
+  geom_label_repel(
+    data = topGenes20_MET_AG,
+    aes(label = Gene),
+    size = 3,
+    color = "black",
+    fill = "white",
+    box.padding  = 0.65,
+    point.padding = 0.3,
+    force = 100,
+    max.overlaps = Inf,
+    segment.color = "black"
+  )
+
+# 6) Print the final plot
+print(p_MET_AG)
+```
+```{r}
+library(ggplot2)
+library(ggrepel)
+
+# 1) Assign your MET LIMB_PARENTAL columns to simpler names
+proteomicaA549$log2FC_LIMB   <- proteomicaA549$`Log2 FoldChange MET LIMB_PARENTAL`
+proteomicaA549$negLogP_LIMB  <- proteomicaA549$`-Log p-value MET LIMB_PARENTAL`
+proteomicaA549$pval_LIMB     <- proteomicaA549$`p-value MET LIMB_PARENTAL`
+proteomicaA549$Gene          <- proteomicaA549$Gene  # Gene/protein names
+
+# 2) Define “Significance” based on log2FC and p-value (±0.38 cutoff, p < 0.05)
+proteomicaA549$Significance_LIMB <- "Not Sig"
+proteomicaA549$Significance_LIMB[
+  proteomicaA549$log2FC_LIMB >= 0.38 & proteomicaA549$pval_LIMB < 0.05
+] <- "Up"
+proteomicaA549$Significance_LIMB[
+  proteomicaA549$log2FC_LIMB <= -0.38 & proteomicaA549$pval_LIMB < 0.05
+] <- "Down"
+
+# 3) Build the volcano plot
+p_LIMB <- ggplot(
+  proteomicaA549,
+  aes(x = log2FC_LIMB, y = negLogP_LIMB, color = Significance_LIMB)
+) +
+  geom_point(alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8", "Not Sig" = "grey70", "Up" = "firebrick")
+  ) +
+  labs(
+    title = "A549: Bone vs. Parental",
+    x = expression(log[2]~fold~change),
+    y = expression(-log[10]~pvalue)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  )
+
+# 4) Add dashed lines for log2FC=±0.38 and p=0.05
+p_LIMB <- p_LIMB +
+  geom_vline(xintercept = c(-0.38, 0.38), color = "blue", linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05),   color = "blue", linetype = "dashed")
+
+# 5) Label the top 20 most significant genes
+topGenes_LIMB <- subset(proteomicaA549, pval_LIMB < 0.05 & abs(log2FC_LIMB) > 2)
+topGenes_LIMB <- topGenes_LIMB[order(topGenes_LIMB$pval_LIMB), ]
+topGenes20_LIMB <- head(topGenes_LIMB, 20)
+
+p_LIMB <- p_LIMB +
+  geom_label_repel(
+    data = topGenes20_LIMB,
+    aes(label = Gene),
+    size = 3,
+    color = "black",
+    fill = "white",
+    box.padding  = 0.65,
+    point.padding = 0.3,
+    force = 8,
+    max.overlaps = Inf,
+    segment.color = "black"
+  )
+
+# 6) Print the final plot
+print(p_LIMB)
+```
+
+

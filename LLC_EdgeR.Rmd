@@ -1,0 +1,1475 @@
+---
+title: "LLC EdgeR"
+author: "Covadonga Rodríguez Suárez"
+date: "5/16/2025"
+output: html_document
+---
+
+## 1) Data Preparation and Normalization
+
+```{r, message=FALSE, warning=FALSE}
+library(DESeq2)
+library(ggplot2)
+library(readr)
+library(tidyverse)
+library(ggplot2)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+counts = read.delim("mouse_featureCounts_1303.csv", header = TRUE, row.names = 1,sep = ";")
+
+head(counts)
+```
+
+```{r}
+counts$gene_name <- NULL
+head(counts)
+
+head(counts)
+```
+
+
+First, remove lowly expressed genes 
+```{r}
+counts <- counts[which(rowSums(counts)>10),]
+```
+
+Then, we load the metadata to link the sample name with the groups of the experiment
+```{r}
+metadata <- read.delim("mouse_metadatos_140325.csv", header = TRUE, row.names = 1,sep = ";")
+metadata
+```
+
+```{r}
+group = metadata$group
+group
+```
+
+```{r}
+all(colnames(counts) == rownames(metadata))
+```
+
+
+Retry with edgeR
+
+```{r}
+library(edgeR)
+
+DGE <- DGEList(counts = counts, samples = metadata)
+
+g2k <- filterByExpr(DGE, group = "group")
+
+DGE <- DGE[g2k,]
+
+DGE <- calcNormFactors(DGE)
+
+par(mfrow=c(2,3))
+for (i in seq_len(ncol(DGE))) {
+  plotMD(DGE, column = i)
+}
+
+```
+
+```{r}
+
+modelmatrix <- model.matrix(~0 + group)
+
+DGE <- estimateDisp(DGE, modelmatrix)
+fit <- glmQLFit(DGE, modelmatrix, robust = T)
+
+plotBCV(DGE)
+plotQLDisp(fit)
+
+```
+
+```{r}
+colnames(modelmatrix)
+```
+
+CTC vs P
+
+```{r}
+test_CTCvsP <- glmQLFTest(fit, contrast = c(0, 1, 0, -1))
+
+DEGs_CTCvsP <- topTags(test_CTCvsP, n = nrow(fit), sort.by = "logFC")
+
+table_CTCvsP <- DEGs_CTCvsP$table
+table_CTCvsP$ensembl_id <- rownames(table_CTCvsP)
+
+ggplot(table_CTCvsP, aes(x = logFC, y = -log10(FDR))) + 
+  geom_point()
+
+```
+```{r}
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+
+# 1) Filter for |log2FC| > 2 & FDR < 0.05
+sig_CTCvsP <- subset(
+  table_CTCvsP,
+  abs(logFC) > 2 & FDR < 0.05
+)
+
+# 2) Sort by ascending FDR
+sig_CTCvsP <- sig_CTCvsP[ order(sig_CTCvsP$FDR), ]
+
+# 3) Add SYMBOL column by mapping ENSEMBL → SYMBOL
+sig_CTCvsP$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys      = sub("\\..*$","", sig_CTCvsP$ensembl_id),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+sig_CTCvsP <- sig_CTCvsP[ 
+  !is.na(sig_CTCvsP$symbol) & sig_CTCvsP$symbol != "NA", 
+]
+
+# 4) Reorder columns to place symbol after ensembl_id
+sig_CTCvsP <- sig_CTCvsP[, c(
+  "ensembl_id", "symbol",
+  "logFC", "logCPM", "F", "PValue", "FDR"
+)]
+
+# 5) Write to CSV
+# write.csv(
+#   sig_CTCvsP,
+#   file      = "LLC_CTCvsP_DEGs_absFC2_FDR05.csv",
+#   sep       = ";",
+#   row.names = FALSE,
+#   quote     = FALSE,
+#   dec       = "."
+# )
+
+# 6) Preview the first few rows
+head(sig_CTCvsP)
+```
+
+B vs P
+
+```{r}
+test_BvsP <- glmQLFTest(fit, contrast = c(1, 0, 0,-1))
+
+DEGs_BvsP <- topTags(test_BvsP, n = nrow(fit), sort.by = "logFC")
+
+table_BvsP <- DEGs_BvsP$table
+table_BvsP$ensembl_id <- rownames(table_BvsP)
+
+ggplot(table_BvsP, aes(x = logFC, y = -log10(FDR))) + 
+  geom_point()
+
+```
+```{r}
+# 1) Filter for |log2FC| > 2 & FDR < 0.05
+sig_BvsP <- subset(
+  table_BvsP,
+  abs(logFC) > 2 & FDR < 0.05
+)
+
+# 2) Sort rows by ascending FDR
+sig_BvsP <- sig_BvsP[ order(sig_BvsP$FDR), ]
+
+# 3) Add SYMBOL column by mapping ENSEMBL → SYMBOL
+sig_BvsP$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys      = sub("\\..*$","", sig_BvsP$ensembl_id),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+sig_BvsP <- sig_BvsP[ 
+  !is.na(sig_BvsP$symbol) & sig_BvsP$symbol != "NA", 
+]
+
+# 4) Select and reorder columns of interest (include symbol)
+sig_BvsP <- sig_BvsP[, c(
+  "ensembl_id", "symbol",
+  "logFC", "logCPM", "F", "PValue", "FDR"
+)]
+
+# 5) Write to CSV
+# write.csv(
+#   sig_BvsP,
+#   file      = "LLC_BvsP_DEGs_absFC2_FDR05.csv",
+#   sep       = ";",
+#   row.names = FALSE,
+#   quote     = FALSE,
+#   dec       = "."
+# )
+
+# 6) Show first few lines
+head(sig_BvsP)
+```
+
+L vs P
+
+```{r}
+test_LvsP <- glmQLFTest(fit, contrast = c(0, 0, 1, -1))
+
+DEGs_LvsP <- topTags(test_LvsP, n = nrow(fit), sort.by = "logFC")
+
+table_LvsP <- DEGs_LvsP$table
+table_LvsP$ensembl_id <- rownames(table_LvsP)
+
+ggplot(table_LvsP, aes(x = logFC, y = -log10(FDR))) + 
+  geom_point()
+```
+```{r}
+# 1) Filter for |log2FC| > 2 & FDR < 0.05
+sig_LvsP <- subset(
+  table_LvsP,
+  abs(logFC) > 2 & FDR < 0.05
+)
+
+# 2) Sort rows by ascending FDR
+sig_LvsP <- sig_LvsP[ order(sig_LvsP$FDR), ]
+
+# 3) Add SYMBOL column by mapping ENSEMBL → SYMBOL
+sig_LvsP$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys      = sub("\\..*$","", sig_LvsP$ensembl_id),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+sig_LvsP <- sig_LvsP[ 
+  !is.na(sig_LvsP$symbol) & sig_LvsP$symbol != "NA", 
+]
+
+# 4) Select and reorder columns of interest (include symbol)
+sig_LvsP <- sig_LvsP[, c(
+  "ensembl_id", "symbol",
+  "logFC", "logCPM", "F", "PValue", "FDR"
+)]
+
+# 5) Write to CSV
+# write.csv(
+#   sig_LvsP,
+#   file      = "LLC_LvsP_DEGs_absFC2_FDR05.csv",
+#   sep       = ";",
+#   row.names = FALSE,
+#   quote     = FALSE,
+#   dec       = "."
+# )
+
+# 6) Show first few lines
+head(sig_LvsP)
+```
+
+
+
+# PCA 
+
+```{r}
+# 1. Prepare data for PCA: logCPM values
+logcpm_matrix <- cpm(DGE, log = TRUE, prior.count = 2) # prior.count helps to stabilize variance for lowly expressed genes
+
+data_for_pca <- t(logcpm_matrix)
+
+# 2. Run PCA
+pca_results <- prcomp(data_for_pca, center = TRUE, scale. = FALSE) # Consider scale. = TRUE if variances differ widely
+
+# 3. Prepare for plotting
+pca_df <- data.frame(
+  PC1 = pca_results$x[, 1],
+  PC2 = pca_results$x[, 2],
+  Group = DGE$samples$group # This comes from your 'metadata$group' via DGEList creation
+)
+
+# Calculate variance explained by each PC
+pca_summary <- summary(pca_results)
+variance_explained <- pca_summary$importance[2, 1:2] * 100 # PercentBe for PC1 and PC2
+
+# 4. Visualize PCA
+ggplot(pca_df, aes(x = PC1, y = PC2, color = Group)) +
+  geom_point(size = 3) +
+  labs(
+    title = "PCA of LLC Samples", # Adapted title for mouse data
+    x = paste0("PC1 (", sprintf("%.1f", variance_explained[1]), "% variance)"),
+    y = paste0("PC2 (", sprintf("%.1f", variance_explained[2]), "% variance)"),
+    color = "Experimental Group"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+
+scree_data <- data.frame(
+  PC = factor(1:length(pca_summary$sdev)), # Factor for discrete x-axis
+  Variance = pca_summary$importance[2,]    # Proportion of variance
+)
+ggplot(scree_data, aes(x = PC, y = Variance, group = 1)) + # group=1 for geom_line
+  geom_bar(stat = "identity", fill = "steelblue", alpha = 0.7) +
+  geom_line(color = "red", linewidth = 1) +
+  geom_point(color = "red", size = 2) +
+  labs(
+    title = "Scree Plot - Variance Explained by Principal Components",
+    x = "Principal Component",
+    y = "Proportion of Variance Explained"
+  ) +
+  scale_y_continuous(labels = scales::percent) + # Format y-axis as percentBe
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+```{r}
+library(edgeR)
+library(ggplot2)
+
+DGE <- DGEList(counts = counts, samples = metadata)
+keep <- filterByExpr(DGE, group = metadata$group)
+DGE  <- DGE[keep, , keep.lib.sizes=FALSE]
+DGE_norm <- calcNormFactors(DGE)
+
+# 1) Get log2-CPM matrix
+logCPM <- cpm(DGE_norm, log=TRUE, prior.count=1)
+
+# 2) Transpose for PCA: samples × genes
+pca_data <- prcomp(t(logCPM), center=TRUE, scale.=TRUE)
+
+# 3) Grab the first two PCs
+scores <- as.data.frame(pca_data$x[,1:2])
+scores$sample <- rownames(scores)
+scores$group  <- metadata[ scores$sample, "group" ]
+
+# 4) % variance explained
+var_expl <- pca_data$sdev^2 / sum(pca_data$sdev^2) * 100
+
+# 5) Plot
+ggplot(scores, aes(PC1, PC2, color=group)) +
+  geom_point(size=3) +
+  xlab(sprintf("PC1: %.1f%% variance", var_expl[1])) +
+  ylab(sprintf("PC2: %.1f%% variance", var_expl[2])) +
+  theme_minimal() +
+  ggtitle("PCA of log2-CPM")
+```
+```{r}
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+library(dplyr)
+
+# 1) Extract PC1 loadings
+loadings     <- pca_data$rotation
+pc1_loadings <- loadings[, "PC1"]
+
+# 2) Build and rank
+df_pc1 <- data.frame(
+  ensembl_id  = rownames(loadings),
+  loading     = pc1_loadings,
+  abs_loading = abs(pc1_loadings),
+  stringsAsFactors = FALSE
+) %>%
+  arrange(desc(abs_loading))
+
+# 3) Map to SYMBOL and attach
+keys <- sub("\\..*$", "", df_pc1$ensembl_id)
+syms <- mapIds(
+  org.Mm.eg.db,
+  keys      = keys,
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+df_pc1$symbol <- syms[keys]
+
+# 4) Drop any rows with NA symbol
+df_pc1_clean <- df_pc1 %>% filter(!is.na(symbol))
+
+# 5) Take top 20 by abs_loading
+top20_pc1 <- df_pc1_clean %>% slice(1:20)
+
+# 6) View
+top20_pc1
+```
+
+
+# UMAP
+
+```{r}
+library(uwot)
+library(ggplot2)
+
+mat <- t(logCPM)
+
+set.seed(100)
+umap_emb <- uwot::umap(
+  mat,
+  n_neighbors = 5,
+  min_dist    = 0.1,
+  metric      = "euclidean"
+)
+
+umap_df <- as.data.frame(umap_emb)
+colnames(umap_df)[1:2] <- c("UMAP1","UMAP2")
+
+if (!is.null(rownames(umap_df))) {
+  umap_df$sample <- rownames(umap_df)
+} else {
+  umap_df$sample <- rownames(mat)
+}
+
+umap_df$group <- metadata[umap_df$sample, "group"]
+
+ggplot(umap_df, aes(UMAP1, UMAP2, color = group)) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  ggtitle("UMAP of LLC Samples (log2-CPM)")
+```
+
+
+
+# Volcano Plots
+
+```{r, messBe=FALSE, warning=FALSE}
+library(ggplot2)
+library(ggrepel)
+library(org.Mm.eg.db)
+```
+
+1) CTC vs P
+
+```{r}
+
+# 1) Load & Prepare the table
+# add symbol column
+table_CTCvsP$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys      = table_CTCvsP$ensembl_id,
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+# make a -log10(FDR) column 
+table_CTCvsP$negLog10FDR <- -log10(table_CTCvsP$FDR)
+
+
+# 2) Define “Up”, “Down” & “Not Sig”
+logFC.cutoff <- 2     
+fdr.cutoff   <- 0.05
+
+table_CTCvsP$Significance <- "Not Sig"
+table_CTCvsP$Significance[
+  table_CTCvsP$FDR < fdr.cutoff & table_CTCvsP$logFC >  logFC.cutoff
+] <- "Up"
+table_CTCvsP$Significance[
+  table_CTCvsP$FDR < fdr.cutoff & table_CTCvsP$logFC < -logFC.cutoff
+] <- "Down"
+
+
+# 3) Build the volcano plot
+p_CTC <- ggplot(table_CTCvsP, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8",
+               "Not Sig" = "grey70",
+               "Up" = "firebrick")
+  ) +
+  labs(
+    title = "LLC: CTC vs Parental",
+    x     = expression(log[2]~fold~change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue")
+
+
+# 4) Label top hits
+topHits_CTC <- subset(table_CTCvsP, FDR < 0.05 & abs(logFC) > 2)
+topHits_CTC <- topHits_CTC[order(topHits_CTC$FDR), ]
+top20_CTC   <- head(topHits_CTC, 20)
+
+p_CTC <- p_CTC + 
+  geom_label_repel(
+    data          = top20_CTC,
+    aes(label     = symbol),
+    size          = 3,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.65,
+    point.padding = 0.3,
+    force         = 15,
+    max.overlaps  = Inf,
+    segment.color = "black"
+  )
+
+# 5) Print
+print(p_CTC)
+```
+
+
+2) B vs P
+
+```{r, warning=FALSE}
+
+# 1) Load & Prepare the table
+# add symbol column
+table_BvsP$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys      = table_BvsP$ensembl_id,
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+# make a -log10(FDR) column 
+table_BvsP$negLog10FDR <- -log10(table_BvsP$FDR)
+
+
+# 2) Define “Up”, “Down” & “Not Sig”
+logFC.cutoff <- 2    
+fdr.cutoff   <- 0.05  
+
+table_BvsP$Significance <- "Not Sig"
+table_BvsP$Significance[
+  table_BvsP$FDR < fdr.cutoff & table_BvsP$logFC >  logFC.cutoff
+] <- "Up"
+table_BvsP$Significance[
+  table_BvsP$FDR < fdr.cutoff & table_BvsP$logFC < -logFC.cutoff
+] <- "Down"
+
+# 3) Build the volcano plot
+p_B <- ggplot(table_BvsP, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8",
+               "Not Sig" = "grey70",
+               "Up" = "firebrick")
+  ) +
+  labs(
+    title = "LLC: Brain vs Parental",
+    x     = expression(log[2]~fold~change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue")
+
+
+# 4) Label top hits
+topHits <- subset(table_BvsP, FDR < 0.05 & abs(logFC) > 2)
+topHits <- topHits[order(topHits$FDR), ]
+top20   <- head(topHits, 20)
+
+p_B <- p_B + 
+  geom_label_repel(
+    data          = top20,
+    aes(label     = symbol),
+    size          = 3,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.65,
+    point.padding = 0.3,
+    force         = 15,
+    max.overlaps  = Inf,
+    segment.color = "black"
+  )
+
+# 5) Print
+print(p_B)
+```
+
+3) L vs P
+
+```{r, warning=FALSE}
+
+# 1) Load & Prepare the table
+# add symbol column
+table_LvsP$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys      = table_LvsP$ensembl_id,
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+# make a -log10(FDR) column 
+table_LvsP$negLog10FDR <- -log10(table_LvsP$FDR)
+
+
+# 2) Define “Up”, “Down” & “Not Sig”
+# thresholds
+logFC.cutoff <- 2     
+fdr.cutoff   <- 0.05
+
+table_LvsP$Significance <- "Not Sig"
+table_LvsP$Significance[
+  table_LvsP$FDR < fdr.cutoff & table_LvsP$logFC >  logFC.cutoff
+] <- "Up"
+table_LvsP$Significance[
+  table_LvsP$FDR < fdr.cutoff & table_LvsP$logFC < -logFC.cutoff
+] <- "Down"
+
+
+# 3) Build the volcano plot
+p_L <- ggplot(table_LvsP, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8",
+               "Not Sig" = "grey70",
+               "Up" = "firebrick")
+  ) +
+  labs(
+    title = "LLC: Bone vs Parental",
+    x     = expression(log[2]~fold~change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue")
+
+
+# 4) Label top hits
+topHits <- subset(table_LvsP, FDR < 0.05 & abs(logFC) > 2)
+topHits <- topHits[order(topHits$FDR), ]
+top20   <- head(topHits, 20)
+
+p_L <- p_L + 
+  geom_label_repel(
+    data          = top20,
+    aes(label     = symbol),
+    size          = 3,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.65,
+    point.padding = 0.3,
+    force         = 15,
+    max.overlaps  = Inf,
+    segment.color = "black"
+  )
+
+# 5) Print
+print(p_L)
+```
+4) AG vs P
+
+```{r}
+
+# 1) Prepare table
+table_AGvsP$symbol       <- mapIds(
+  org.Mm.eg.db,
+  keys      = table_AGvsP$ensembl_id,
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+table_AGvsP$negLog10FDR <- -log10(table_AGvsP$FDR)
+
+# 2) Call significance
+logFC.cutoff <- 2
+fdr.cutoff   <- 0.05
+
+table_AGvsP$Significance <- "Not Sig"
+table_AGvsP$Significance[
+  table_AGvsP$FDR < fdr.cutoff & table_AGvsP$logFC >  logFC.cutoff
+] <- "Up"
+table_AGvsP$Significance[
+  table_AGvsP$FDR < fdr.cutoff & table_AGvsP$logFC < -logFC.cutoff
+] <- "Down"
+
+# 3) Build base plot
+p_AG <- ggplot(table_AGvsP, aes(logFC, negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8",
+               "Not Sig" = "grey70",
+               "Up" = "firebrick")
+  ) +
+  labs(
+    title = "LLC: Adrenal Gland vs Parental",
+    x     = expression(log[2]~fold~change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue")
+
+# 4) Label top hits
+topHits_AG <- subset(table_AGvsP, FDR < fdr.cutoff & abs(logFC) > logFC.cutoff)
+top20_AG   <- head(topHits_AG[order(topHits_AG$FDR), ], 20)
+
+p_AG <- p_AG +
+  geom_label_repel(
+    data          = top20_AG,
+    aes(label     = symbol),
+    size          = 3,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.65,
+    point.padding = 0.3,
+    force         = 15,
+    max.overlaps  = Inf,
+    segment.color = "black"
+  )
+
+# 5) Print
+print(p_AG)
+
+```
+5) Li vs P
+
+```{r}
+
+# 1) Prepare table
+table_LivsP$symbol       <- mapIds(
+  org.Mm.eg.db,
+  keys      = table_LivsP$ensembl_id,
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+table_LivsP$negLog10FDR <- -log10(table_LivsP$FDR)
+
+# 2) Call significance
+logFC.cutoff <- 2
+fdr.cutoff   <- 0.05
+
+table_LivsP$Significance <- "Not Sig"
+table_LivsP$Significance[
+  table_LivsP$FDR < fdr.cutoff & table_LivsP$logFC >  logFC.cutoff
+] <- "Up"
+table_LivsP$Significance[
+  table_LivsP$FDR < fdr.cutoff & table_LivsP$logFC < -logFC.cutoff
+] <- "Down"
+
+# 3) Build base plot
+p_Li <- ggplot(table_LivsP, aes(logFC, negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8",
+               "Not Sig" = "grey70",
+               "Up" = "firebrick")
+  ) +
+  labs(
+    title = "LLC: Liver vs Parental",
+    x     = expression(log[2]~fold~change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue")
+
+# 4) Label top hits
+topHits_Li <- subset(table_LivsP, FDR < fdr.cutoff & abs(logFC) > logFC.cutoff)
+top20_Li   <- head(topHits_Li[order(topHits_Li$FDR), ], 20)
+
+p_Li <- p_Li +
+  geom_label_repel(
+    data          = top20_Li,
+    aes(label     = symbol),
+    size          = 3,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.65,
+    point.padding = 0.3,
+    force         = 15,
+    max.overlaps  = Inf,
+    segment.color = "black"
+  )
+
+# 5) Print
+print(p_Li)
+
+```
+
+
+4) Metastasic lines: B vs L
+
+```{r}
+
+# 1) Load & Prepare your table
+# add symbol column
+table_BvsL$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys      = table_BvsL$ensembl_id,
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+# make a -log10(FDR) column 
+table_BvsL$negLog10FDR <- -log10(table_BvsL$FDR)
+
+
+# 2) Define “Up”, “Down” & “Not Sig”
+logFC.cutoff <- 2     # 2‐fold change
+fdr.cutoff   <- 0.05  # FDR < 0.01
+
+table_BvsL$Significance <- "Not Sig"
+table_BvsL$Significance[
+  table_BvsL$FDR < fdr.cutoff & table_BvsL$logFC >  logFC.cutoff
+] <- "Up"
+table_BvsL$Significance[
+  table_BvsL$FDR < fdr.cutoff & table_BvsL$logFC < -logFC.cutoff
+] <- "Down"
+
+
+# 3) Build the volcano plot
+p_BvsL <- ggplot(table_BvsL, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8",
+               "Not Sig" = "grey70",
+               "Up" = "firebrick")
+  ) +
+  labs(
+    title = "LLC Metastasic Lines: Brain vs Bone",
+    x     = expression(log[2]~fold~change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue")
+
+
+# 4) Label top hits
+topHits_BvsL <- subset(table_BvsL, FDR < 0.05 & abs(logFC) > 2)
+topHits_BvsL <- topHits_BvsL[order(topHits_BvsL$FDR), ]
+top20_BvsL   <- head(topHits_BvsL, 20)
+
+p_BvsL <- p_BvsL + 
+  geom_label_repel(
+    data          = top20_BvsL,
+    aes(label     = symbol),
+    size          = 3,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.65,
+    point.padding = 0.3,
+    force         = 15,
+    max.overlaps  = Inf,
+    segment.color = "black"
+  )
+
+
+# 5) Print
+print(p_BvsL)
+```
+
+
+Volcano plot: Brain vs CTC
+```{r}
+# 1) Load & Prepare your table
+# add symbol column
+table_BvsCTC$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys      = sub("\\..*$", "", table_BvsCTC$ensembl_id),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+# add –log10(FDR)
+table_BvsCTC$negLog10FDR <- -log10(table_BvsCTC$FDR)
+
+
+# 2) Define “Up”, “Down” & “Not Sig”
+logFC.cutoff <- 2     
+fdr.cutoff   <- 0.05 
+
+table_BvsCTC$Significance <- "Not Sig"
+table_BvsCTC$Significance[
+  table_BvsCTC$FDR < fdr.cutoff & table_BvsCTC$logFC >  logFC.cutoff
+] <- "Up"
+table_BvsCTC$Significance[
+  table_BvsCTC$FDR < fdr.cutoff & table_BvsCTC$logFC < -logFC.cutoff
+] <- "Down"
+
+
+# 3) Build the volcano plot
+p_BvsCTC <- ggplot(table_BvsCTC, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down"    = "#377EB8",
+               "Not Sig" = "grey70",
+               "Up"      = "firebrick")
+  ) +
+  labs(
+    title = "LLC: Brain vs CTC",
+    x     = expression(log[2]~fold~change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue")
+
+
+# 4) Label top hits
+topHits_BvsCTC <- subset(table_BvsCTC, FDR < fdr.cutoff & abs(logFC) > logFC.cutoff)
+topHits_BvsCTC <- topHits_BvsCTC[order(topHits_BvsCTC$FDR), ]
+top20_BvsCTC  <- head(topHits_BvsCTC, 20)
+
+p_BvsCTC <- p_BvsCTC + 
+  geom_label_repel(
+    data          = top20_BvsCTC,
+    aes(label     = symbol),
+    size          = 2,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.65,
+    point.padding = 0.3,
+    force         = 15,
+    max.overlaps  = Inf,
+    segment.color = "black"
+  )
+
+# 5) Print
+print(p_BvsCTC)
+```
+
+
+Volcano plot: Bone vs CTC
+```{r}
+# 1) Load & Prepare your table
+# add symbol column
+table_LvsCTC$symbol <- mapIds(
+  org.Mm.eg.db,
+  keys      = sub("\\..*$", "", table_LvsCTC$ensembl_id),
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+
+# add –log10(FDR)
+table_LvsCTC$negLog10FDR <- -log10(table_LvsCTC$FDR)
+
+
+# 2) Define “Up”, “Down” & “Not Sig”
+logFC.cutoff <- 2    
+fdr.cutoff   <- 0.05  #
+
+table_LvsCTC$Significance <- "Not Sig"
+table_LvsCTC$Significance[
+  table_LvsCTC$FDR < fdr.cutoff & table_LvsCTC$logFC >  logFC.cutoff
+] <- "Up"
+table_LvsCTC$Significance[
+  table_LvsCTC$FDR < fdr.cutoff & table_LvsCTC$logFC < -logFC.cutoff
+] <- "Down"
+
+
+# 3) Build the volcano plot
+p_LvsCTC <- ggplot(table_LvsCTC, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+  scale_color_manual(
+    values = c("Down" = "#377EB8",
+               "Not Sig" = "grey70",
+               "Up" = "firebrick")
+  ) +
+  labs(
+    title = "LLC: Bone vs CTC",
+    x     = expression(log[2]~fold~change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue")
+
+
+# 4) Label top hits
+topHits_LvsCTC <- subset(table_LvsCTC, FDR < fdr.cutoff & abs(logFC) > logFC.cutoff)
+topHits_LvsCTC <- topHits_LvsCTC[order(topHits_LvsCTC$FDR), ]
+top20_LvsCTC  <- head(topHits_LvsCTC, 20)
+
+p_LvsCTC <- p_LvsCTC + 
+  geom_label_repel(
+    data          = top20_LvsCTC,
+    aes(label     = symbol),
+    size          = 2,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.65,
+    point.padding = 0.3,
+    force         = 40,
+    max.overlaps  = Inf,
+    segment.color = "black"
+  )
+
+# 5) Print
+print(p_LvsCTC)
+```
+
+
+# Heatmaps
+
+```{r, warning=F, echo=f}
+library(edgeR)
+library(pheatmap)
+library(RColorBrewer)
+library(matrixStats)
+library(org.Mm.eg.db)
+library(AnnotationDbi)
+library(ComplexHeatmap)
+library(circlize)
+library(Cairo)
+```
+
+
+Global Heatmap
+
+```{r}
+
+# 1) Compute log2‐CPM matrix from the normalized DGE
+cpm_mat <- cpm(DGE_norm, log=TRUE, prior.count=1)
+
+
+# 2) Select top 20 most variable genes
+variances <- rowVars(cpm_mat)
+topVarIdx <- order(variances, decreasing=TRUE)[1:20]
+topGenes  <- rownames(cpm_mat)[topVarIdx]
+mat       <- cpm_mat[topGenes, ]
+
+
+# 3) Map ENSEMBL → SYMBOL
+ensembl_ids   <- sub("\\..*$", "", topGenes)
+symbol_map    <- mapIds(
+  org.Mm.eg.db,
+  keys      = ensembl_ids,
+  column    = "SYMBOL",
+  keytype   = "ENSEMBL",
+  multiVals = "first"
+)
+rownames(mat) <- symbol_map
+
+# 4) Center rows
+mat <- mat - rowMeans(mat)
+
+
+# 5) Column annotation & ordering
+annotation_col <- data.frame(
+  group = DGE_norm$samples$group,
+  row.names = colnames(mat)
+)
+
+desired_order <- c(
+  "LP1","LP2","LP3",     
+  "LCTC1","LCTC2","LCTC3",
+  "LB1","LB2","LB3",   
+  "LL1","LL2","LL3"       
+)
+
+mat2 <- mat[, desired_order]
+ann2 <- annotation_col[desired_order, , drop = FALSE]
+
+
+# 6) Plot heatmap
+colors <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+my_group_colors <- c(
+  B  = "#1b9e77", 
+  CTC = "#d95f02",  
+  L   = "#7570b3",  
+  P   = "#e7298a"  
+)
+
+pheatmap(
+  mat2,
+  annotation_col    = annotation_col,
+  annotation_colors = list(group = my_group_colors),
+  color             = colors,
+  cluster_cols      = FALSE,
+  show_rownames     = TRUE,
+  main              = "A549: Top 20 Most Variable Genes"
+)
+```
+
+1) CTC vs P
+```{r}
+# 1) Compute log2-CPM matrix once
+cpm_mat <- cpm(DGE_norm, log = TRUE, prior.count = 1)
+
+# 2) Pull Top 20 DEGs from table_CTCvsP
+resSig_CTCvsP <- subset(table_CTCvsP, abs(logFC) > 2 & FDR < 0.01)
+resSig_CTCvsP <- resSig_CTCvsP[order(resSig_CTCvsP$FDR), ]
+top20_CTCvsP  <- head(resSig_CTCvsP, 20)
+
+# strip version suffix to match rownames(cpm_mat)
+genes20 <- sub("\\..*$", "", top20_CTCvsP$ensembl_id)
+
+# 3) Subset CPM matrix to those 20 genes
+present  <- intersect(genes20, rownames(cpm_mat))
+mat0     <- cpm_mat[present, , drop = FALSE]
+
+# 4) Rename rows by the SYMBOL column
+symb     <- top20_CTCvsP$symbol[
+               match(present, sub("\\..*$","", top20_CTCvsP$ensembl_id))
+             ]
+rownames(mat0) <- symb
+
+# 5) Center each gene (row) to zero mean
+mat      <- mat0 - rowMeans(mat0)
+
+# 6) Build annotation and reorder columns
+annotation_col <- data.frame(
+  group     = DGE_norm$samples$group,
+  row.names = colnames(mat)
+)
+
+desired_order <- c("LP1","LP2","LP3",   # Parental
+                   "LCTC1","LCTC2","LCTC3")  # CTC
+
+mat2 <- mat[, desired_order, drop = FALSE]
+ann2 <- annotation_col[desired_order, , drop = FALSE]
+
+# drop any unused factor levels
+ann2$group <- droplevels(ann2$group)
+
+# 7) Define a color palette and annotation colors
+heat_colors    <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+group_colors   <- c(P = "#e7298a", CTC = "#d95f02") 
+
+# 8) Draw the heatmap
+pheatmap(
+  mat2,
+  annotation_col    = ann2,
+  annotation_colors = list(group = group_colors),
+  color             = heat_colors,
+  cluster_cols      = FALSE,
+  show_rownames     = TRUE,
+  main              = "LLC CTC vs Parental: Top 20 DEGs (edgeR log2-CPM)"
+)
+```
+
+
+Heatmap B vs P
+
+```{r}
+# 1) Compute log2-CPM once
+cpm_mat_BvsP <- cpm(DGE_norm, log = TRUE, prior.count = 1)
+
+# 2) Pull Top 20 DEGs from table_BvsP
+resSig_BvsP <- subset(table_BvsP, abs(logFC) > 2 & FDR < 0.01)
+resSig_BvsP <- resSig_BvsP[ order(resSig_BvsP$FDR), ]
+top20_BvsP  <- head(resSig_BvsP, 20)
+
+# strip version suffix for matching
+genes20_BvsP <- sub("\\..*$", "", top20_BvsP$ensembl_id)
+
+# 3) Subset CPM matrix to those 20 genes
+present_BvsP <- intersect(genes20_BvsP, rownames(cpm_mat_BvsP))
+mat0_BvsP    <- cpm_mat_BvsP[present_BvsP, , drop = FALSE]
+
+# 4) Rename rows by the symbol column (dropping any NAs)
+symb_BvsP <- top20_BvsP$symbol[
+  match(present_BvsP, sub("\\..*$","", top20_BvsP$ensembl_id))
+]
+valid     <- !is.na(symb_BvsP)
+mat0_BvsP <- mat0_BvsP[valid, , drop = FALSE]
+symb_BvsP <- symb_BvsP[valid]
+rownames(mat0_BvsP) <- symb_BvsP
+
+# 5) Center each row
+mat_BvsP <- mat0_BvsP - rowMeans(mat0_BvsP)
+
+# 6) Build annotation & reorder columns 
+annotation_col_BvsP <- data.frame(
+  group     = DGE_norm$samples$group,
+  row.names = colnames(mat_BvsP)
+)
+desired_order_BvsP <- c("LP1","LP2","LP3", "LB1","LB2","LB3")
+mat2_BvsP <- mat_BvsP[, desired_order_BvsP, drop = FALSE]
+ann2_BvsP <- annotation_col_BvsP[desired_order_BvsP, , drop = FALSE]
+ann2_BvsP$group <- droplevels(ann2_BvsP$group)
+
+# 7) Plot heatmap
+heat_colors    <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+group_colors_B <- c(P = "#e7298a", B = "#1b9e77")
+
+pheatmap(
+  mat2_BvsP,
+  annotation_col    = ann2_BvsP,
+  annotation_colors = list(group = group_colors_B),
+  color             = heat_colors,
+  cluster_cols      = FALSE,
+  show_rownames     = TRUE,
+  main              = "A549 Brain vs Parental: Top 20 DEGs (edgeR log2-CPM)"
+)
+```
+
+Heatmap L vs P
+
+```{r}
+# 1) Compute log2-CPM matrix once
+cpm_mat_LvsP <- cpm(DGE_norm, log = TRUE, prior.count = 1)
+
+# 2) Pull Top 20 DEGs from table_LvsP (|logFC| > 2 & FDR < 0.01)
+resSig_LvsP <- subset(table_LvsP, abs(logFC) > 2 & FDR < 0.01)
+resSig_LvsP <- resSig_LvsP[order(resSig_LvsP$FDR), ]
+top20_LvsP  <- head(resSig_LvsP, 20)
+
+# strip version suffix to match rownames(cpm_mat)
+genes_LvsP   <- sub("\\..*$", "", top20_LvsP$ensembl_id)
+
+# 3) Subset CPM matrix to those genes
+present_LvsP <- intersect(genes_LvsP, rownames(cpm_mat_LvsP))
+mat0_LvsP    <- cpm_mat_LvsP[present_LvsP, , drop = FALSE]
+
+# 4) Rename rows by your symbol column, dropping any NA
+symb_LvsP    <- top20_LvsP$symbol[
+                  match(present_LvsP, sub("\\..*$","", top20_LvsP$ensembl_id))
+                ]
+valid_LvsP   <- !is.na(symb_LvsP)
+mat0_LvsP    <- mat0_LvsP[valid_LvsP, , drop = FALSE]
+symb_LvsP    <- symb_LvsP[valid_LvsP]
+rownames(mat0_LvsP) <- symb_LvsP
+
+# 5) Center rows
+mat_LvsP     <- mat0_LvsP - rowMeans(mat0_LvsP)
+
+# 6) Build annotation & reorder columns 
+annot_LvsP   <- data.frame(
+  group     = DGE_norm$samples$group,
+  row.names = colnames(mat_LvsP)
+)
+
+desired_order_LvsP <- c("LP1","LP2","LP3", 
+                        "LL1","LL2","LL3")  
+
+mat2_LvsP  <- mat_LvsP[, desired_order_LvsP, drop = FALSE]
+ann2_LvsP  <- annot_LvsP[desired_order_LvsP, , drop = FALSE]
+
+# Drop unused levels so annotation_colors only needs P & L
+ann2_LvsP$group <- droplevels(ann2_LvsP$group)
+
+# 7) Define color palettes
+heat_colors     <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+my_group_colors <- c(P = "#e7298a", L = "#7570b3")
+
+pheatmap(
+  mat2_LvsP,
+  annotation_col    = ann2_LvsP,
+  annotation_colors = list(group = my_group_colors),
+  color             = heat_colors,
+  cluster_cols      = FALSE,
+  show_rownames     = TRUE,
+  main              = "LLC Bone vs Parental: Top 20 DEGs (edgeR log2-CPM)"
+)
+```
+
+Heatmap Metastasic Lines: B vs L
+
+```{r}
+# 1) Compute log2-CPM from the normalized DGE
+cpm_mat_BvsL <- cpm(DGE_norm, log = TRUE, prior.count = 1)
+
+# 2) Pull Top 20 DEGs from table_BvsL (|logFC| > 2 & FDR < 0.01)
+resSig_BvsL <- subset(table_BvsL, abs(logFC) > 2 & FDR < 0.01)
+resSig_BvsL <- resSig_BvsL[order(resSig_BvsL$FDR), ]
+top20_BvsL  <- head(resSig_BvsL, 20)
+
+# strip version suffix for indexing
+genes_BvsL   <- sub("\\..*$", "", top20_BvsL$ensembl_id)
+present_BvsL <- intersect(genes_BvsL, rownames(cpm_mat_BvsL))
+mat0_BvsL    <- cpm_mat_BvsL[present_BvsL, , drop = FALSE]
+
+# 3) Rename rows by the symbol column, dropping any NA
+symb_BvsL <- top20_BvsL$symbol[
+  match(present_BvsL, sub("\\..*$","", top20_BvsL$ensembl_id))
+]
+valid_BvsL <- !is.na(symb_BvsL)
+mat0_BvsL  <- mat0_BvsL[valid_BvsL, , drop = FALSE]
+symb_BvsL  <- symb_BvsL[valid_BvsL]
+rownames(mat0_BvsL) <- symb_BvsL
+
+# 4) Center each row
+mat_BvsL <- mat0_BvsL - rowMeans(mat0_BvsL)
+
+# 5) Build annotation & reorder columns (B vs L)
+annot_BvsL <- data.frame(
+  group     = DGE_norm$samples$group,
+  row.names = colnames(mat_BvsL)
+)
+
+desired_order_BvsL <- c("LB1","LB2","LB3",  
+                         "LL1","LL2","LL3")     
+
+mat2_BvsL <- mat_BvsL[, desired_order_BvsL, drop = FALSE]
+ann2_BvsL <- annot_BvsL[desired_order_BvsL, , drop = FALSE]
+
+# Drop unused factor levels so annotation_colors only needs B & L
+ann2_BvsL$group <- droplevels(ann2_BvsL$group)
+
+# 6) Define color palettes
+heat_colors   <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+my_group_colors <- c(B = "#1b9e77", L = "#7570b3")
+
+# 7) Draw the heatmap
+pheatmap(
+  mat2_BvsL,
+  annotation_col    = ann2_BvsL,
+  annotation_colors = list(group = my_group_colors),
+  color             = heat_colors,
+  cluster_cols      = FALSE,
+  show_rownames     = TRUE,
+  main              = "LLC Metastasic Lines Brain vs Bone: Top 20 DEGs (edgeR log2-CPM)"
+)
+```
+```{r}
+# 1) Compute log2-CPM from the normalized DGE
+cpm_mat_BvsCTC <- cpm(DGE_norm, log = TRUE, prior.count = 1)
+
+# 2) Pull Top 20 DEGs from table_BvsCTC (|logFC| > 2 & FDR < 0.01)
+resSig_BvsCTC <- subset(table_BvsCTC, abs(logFC) > 2 & FDR < 0.01)
+resSig_BvsCTC <- resSig_BvsCTC[order(resSig_BvsCTC$FDR), ]
+top20_BvsCTC  <- head(resSig_BvsCTC, 20)
+
+# strip version suffix for indexing
+genes_BvsCTC   <- sub("\\..*$", "", top20_BvsCTC$ensembl_id)
+present_BvsCTC <- intersect(genes_BvsCTC, rownames(cpm_mat_BvsCTC))
+mat0_BvsCTC    <- cpm_mat_BvsCTC[present_BvsCTC, , drop = FALSE]
+
+# 3) Rename rows by the symbol column, dropping any NA
+symb_BvsCTC <- top20_BvsCTC$symbol[
+  match(present_BvsCTC, sub("\\..*$","", top20_BvsCTC$ensembl_id))
+]
+valid_BvsCTC <- !is.na(symb_BvsCTC)
+mat0_BvsCTC  <- mat0_BvsCTC[valid_BvsCTC, , drop = FALSE]
+symb_BvsCTC  <- symb_BvsCTC[valid_BvsCTC]
+rownames(mat0_BvsCTC) <- symb_BvsCTC
+
+# 4) Center each row
+mat_BvsCTC <- mat0_BvsCTC - rowMeans(mat0_BvsCTC)
+
+# 5) Build annotation & reorder columns (B vs CTC)
+annot_BvsCTC <- data.frame(
+  group     = DGE_norm$samples$group,
+  row.names = colnames(mat_BvsCTC)
+)
+
+# specify your sample order: first the B replicates, then the CTC replicates
+desired_order_BvsCTC <- c("LCTC1","LCTC2","LCTC3", "LB1","LB2","LB3")
+
+mat2_BvsCTC <- mat_BvsCTC[, desired_order_BvsCTC, drop = FALSE]
+ann2_BvsCTC <- annot_BvsCTC[desired_order_BvsCTC, , drop = FALSE]
+
+# Drop unused factor levels so annotation_colors only needs B & CTC
+ann2_BvsCTC$group <- droplevels(ann2_BvsCTC$group)
+
+# 6) Define color palettes
+heat_colors      <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+my_group_colors  <- c(B = "#1b9e77", CTC = "#d95f02")
+
+# 7) Draw the heatmap
+pheatmap(
+  mat2_BvsCTC,
+  annotation_col    = ann2_BvsCTC,
+  annotation_colors = list(group = my_group_colors),
+  color             = heat_colors,
+  cluster_cols      = FALSE,
+  show_rownames     = TRUE,
+  main              = "LLC Brain vs CTC: Top 20 DEGs (edgeR log2-CPM)"
+)
+```
+```{r}
+# 1) Compute log2-CPM from the normalized DGE
+cpm_mat <- cpm(DGE_norm, log = TRUE, prior.count = 1)
+
+# 2) Identify Top 20 DEGs for Limb (L) vs CTC (|logFC| > 2 & FDR < 0.01)
+resSig_LvsCTC <- subset(table_LvsCTC, abs(logFC) > 2 & FDR < 0.01)
+resSig_LvsCTC <- resSig_LvsCTC[order(resSig_LvsCTC$FDR), ]
+top20_LvsCTC  <- head(resSig_LvsCTC, 20)
+
+# strip version suffix and subset CPM matrix
+genes20       <- sub("\\..*$", "", top20_LvsCTC$ensembl_id)
+present       <- intersect(genes20, rownames(cpm_mat))
+mat0_LvsCTC   <- cpm_mat[present, , drop = FALSE]
+
+# 3) Rename rows to gene symbols
+symb_LvsCTC   <- top20_LvsCTC$symbol[
+  match(present, sub("\\..*$", "", top20_LvsCTC$ensembl_id))
+]
+ok            <- !is.na(symb_LvsCTC)
+mat0_LvsCTC   <- mat0_LvsCTC[ok, , drop = FALSE]
+rownames(mat0_LvsCTC) <- symb_LvsCTC[ok]
+
+# 4) Center each row
+mat_c_LvsCTC  <- mat0_LvsCTC - rowMeans(mat0_LvsCTC)
+
+# 5) Select and order the Limb and CTC samples
+keep_cols     <- c("LCTC1","LCTC2","LCTC3","LL1","LL2","LL3")
+stopifnot(all(keep_cols %in% colnames(mat_c_LvsCTC)))
+
+mat2_LvsCTC   <- mat_c_LvsCTC[, keep_cols, drop = FALSE]
+annot_LvsCTC  <- data.frame(
+  group     = DGE_norm$samples$group,
+  row.names = colnames(mat_c_LvsCTC)
+)[keep_cols, , drop = FALSE]
+annot_LvsCTC$group <- droplevels(annot_LvsCTC$group)
+
+# 6) Define color palettes
+heat_cols     <- colorRampPalette(rev(brewer.pal(9, "RdBu")))(255)
+group_cols    <- c(L = "#7570b3", CTC = "#d95f02")
+
+# 7) Draw the heatmap
+pheatmap(
+  mat2_LvsCTC,
+  annotation_col    = annot_LvsCTC,
+  annotation_colors = list(group = group_cols),
+  color             = heat_cols,
+  cluster_cols      = FALSE,
+  show_rownames     = TRUE,
+  main              = "LLC Bone (L) vs CTC: Top 20 DEGs (log2-CPM)"
+)
+```
+
+
