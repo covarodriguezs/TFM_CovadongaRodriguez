@@ -1,0 +1,1127 @@
+---
+title: "Comparative with Human"
+author: "Covadonga Rodríguez Suárez"
+date: "6/27/2025"
+output: html_document
+---
+```{r, message=FALSE, warning=FALSE}
+library(edgeR)
+library(ggplot2)
+library(readr)
+library(dplyr)
+library(data.table)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+bone <- fread("GSE225208_gene_expression_bone.txt")
+lung <- fread("GSE225208_gene_expression_lung.txt")
+
+setnames(bone, "Gene_Symbol", "gene")
+setnames(lung, "symbol",      "gene")
+
+names(lung) <- make.unique(names(lung))
+
+full_counts <- full_join(bone, lung, by = "gene")
+
+full_counts[is.na(full_counts)] <- 0
+
+fwrite(full_counts, "combined_bone_lung_fullcounts.tsv", sep = "\t")
+```
+
+```{r}
+library(tibble)
+
+counts <- full_counts %>%
+  column_to_rownames("gene")
+
+head(counts)
+```
+```{r}
+library(readxl)
+metadata <- read_excel(
+  "metadata_patientcomparison.xlsx",
+  col_names = c("sample", "group"),
+  skip = 1
+)
+
+metadata <- metadata %>%
+  column_to_rownames("sample")
+
+metadata
+```
+
+```{r}
+group = metadata$group
+group
+```
+```{r}
+all(colnames(counts) == rownames(metadata))
+```
+
+Object creation
+
+```{r}
+library(edgeR)
+
+DGE <- DGEList(counts = counts, samples = metadata)
+
+g2k <- filterByExpr(DGE, group = "group")
+
+DGE <- DGE[g2k,]
+
+DGE <- calcNormFactors(DGE)
+
+par(mfrow=c(2,3))
+for (i in seq_len(ncol(DGE))) {
+  plotMD(DGE, column = i)
+}
+
+```
+
+
+```{r}
+modelmatrix <- model.matrix(~0 + group)
+
+DGE <- estimateDisp(DGE, modelmatrix)
+fit <- glmQLFit(DGE, modelmatrix, robust = T)
+
+plotBCV(DGE)
+plotQLDisp(fit)
+```
+
+```{r}
+colnames(modelmatrix)
+```
+Bone vs Lung
+
+```{r}
+library(ggplot2)
+
+test_BonevsLung <- glmQLFTest(fit, contrast = c(1,-1,0))
+
+DEGs_BonevsLung <- topTags(test_BonevsLung, n = nrow(fit), sort.by = "logFC")
+
+table_BonevsLung <- DEGs_BonevsLung$table
+table_BonevsLung$ensembl_id <- rownames(table_BonevsLung)
+
+ggplot(table_BonevsLung, aes(x = logFC, y = -log10(FDR))) + 
+  geom_point()
+```
+
+BoneLung vs Lung
+
+```{r}
+library(ggplot2)
+
+test_BoneLungvsLung <- glmQLFTest(fit, contrast = c(0,-1,1))
+
+DEGs_BoneLungvsLung <- topTags(test_BoneLungvsLung, n = nrow(fit), sort.by = "logFC")
+
+table_BoneLungvsLung <- DEGs_BoneLungvsLung$table
+table_BoneLungvsLung$ensembl_id <- rownames(table_BoneLungvsLung)
+
+ggplot(table_BoneLungvsLung, aes(x = logFC, y = -log10(FDR))) + 
+  geom_point()
+```
+
+
+```{r}
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+
+# 1) Filter for |log2FC| > 2 & FDR < 0.05
+sig_BonevsLung <- subset(
+  table_BonevsLung,
+  abs(logFC) > 2 & FDR < 0.05
+)
+
+# 2) Sort by ascending FDR
+sig_BonevsLung <- sig_BonevsLung[order(sig_BonevsLung$FDR), ]
+
+# 3) Rename 'ensembl_id' to 'symbol' (since it contains gene symbols)
+colnames(sig_BonevsLung)[colnames(sig_BonevsLung) == "ensembl_id"] <- "symbol"
+
+# 4) Reorder columns if desired
+sig_BonevsLung <- sig_BonevsLung[, c(
+  "symbol", "logFC", "logCPM", "F", "PValue", "FDR"
+)]
+
+# 5) Optional: Write to CSV
+# write.csv(
+#   sig_BonevsLung,
+#   file      = "BonevsLung_DEGs_absFC2_FDR05.csv",
+#   row.names = FALSE,
+#   quote     = FALSE
+# )
+
+# 6) Preview the first few rows
+head(sig_BonevsLung)
+```
+
+```{r}
+# 1) Filter for |log2FC| > 2 & FDR < 0.05
+sig_BoneLungvsLung <- subset(
+  table_BoneLungvsLung,
+  abs(logFC) > 2 & FDR < 0.05
+)
+
+# 2) Sort by ascending FDR
+sig_BoneLungvsLung <- sig_BoneLungvsLung[order(sig_BoneLungvsLung$FDR), ]
+
+# 3) Rename 'ensembl_id' to 'symbol' (since it contains gene symbols)
+colnames(sig_BoneLungvsLung)[colnames(sig_BoneLungvsLung) == "ensembl_id"] <- "symbol"
+
+# 4) Reorder columns if desired
+sig_BoneLungvsLung <- sig_BoneLungvsLung[, c(
+  "symbol", "logFC", "logCPM", "F", "PValue", "FDR"
+)]
+
+# 5) Optional: Write to CSV
+# write.csv(
+#   sig_BoneLungvsLung,
+#   file      = "BoneLungvsLung_DEGs_absFC2_FDR05.csv",
+#   row.names = FALSE,
+#   quote     = FALSE
+# )
+
+# 6) Preview the first few rows
+head(sig_BoneLungvsLung)
+```
+
+PCA
+
+```{r}
+# 1. Prepare data for PCA: logCPM values
+logcpm_matrix <- cpm(DGE, log = TRUE, prior.count = 2)
+
+# PCA is typically performed on samples (rows) by features (genes, columns).
+data_for_pca <- t(logcpm_matrix)
+
+# 2. Run PCA
+pca_results <- prcomp(data_for_pca, center = TRUE, scale. = FALSE) 
+
+# 3. Prepare for plotting
+pca_df <- data.frame(
+  PC1 = pca_results$x[, 1],
+  PC2 = pca_results$x[, 2],
+  Group = DGE$samples$group 
+)
+
+# Calculate variance explained by each PC
+pca_summary <- summary(pca_results)
+variance_explained <- pca_summary$importance[2, 1:2] * 100 # Percentage for PC1 and PC2
+
+# 4. Visualize PCA
+ggplot(pca_df, aes(x = PC1, y = PC2, color = Group)) +
+  geom_point(size = 3) +
+  labs(
+    title = "PCA",
+    x = paste0("PC1 (", sprintf("%.1f", variance_explained[1]), "% variance)"),
+    y = paste0("PC2 (", sprintf("%.1f", variance_explained[2]), "% variance)"),
+    color = "Experimental Group"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+scree_data <- data.frame(
+  PC = 1:length(pca_summary$sdev),
+  Variance = pca_summary$importance[2,]
+)
+ggplot(scree_data, aes(x = PC, y = Variance)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Scree Plot", x = "Principal Component", y = "Proportion of Variance Explained") +
+  theme_minimal()
+
+```
+```{r}
+library(dplyr)
+
+pca_df_filtered <- pca_df %>%
+  filter(Group != "lung bone") %>%
+  mutate(Group = droplevels(Group))
+
+ggplot(pca_df_filtered, aes(x = PC1, y = PC2, color = Group)) +
+  geom_point(size = 3) +
+  labs(
+    title = "PCA",
+    x = paste0("PC1 (", sprintf("%.1f", variance_explained[1]), "% variance)"),
+    y = paste0("PC2 (", sprintf("%.1f", variance_explained[2]), "% variance)"),
+    color = "Experimental Group"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+```
+
+
+
+```{r}
+DGE <- DGEList(counts = counts, samples = metadata)
+keep <- filterByExpr(DGE, group = metadata$group)
+DGE  <- DGE[keep, , keep.lib.sizes=FALSE]
+DGE_norm <- calcNormFactors(DGE)
+
+# 1) Get log2-CPM matrix
+logCPM <- cpm(DGE_norm, log=TRUE, prior.count=1)
+
+# 2) Transpose for PCA: samples × genes
+pca_data <- prcomp(t(logCPM), center=TRUE, scale.=TRUE)
+
+# 3) Grab the first two PCs
+scores <- as.data.frame(pca_data$x[,1:2])
+scores$sample <- rownames(scores)
+scores$group  <- metadata[ scores$sample, "group" ]
+
+# 4) % variance explained
+var_expl <- pca_data$sdev^2 / sum(pca_data$sdev^2) * 100
+
+# 5) Plot
+ggplot(scores, aes(PC1, PC2, color=group)) +
+  geom_point(size=3) +
+  xlab(sprintf("PC1: %.1f%% variance", var_expl[1])) +
+  ylab(sprintf("PC2: %.1f%% variance", var_expl[2])) +
+  theme_minimal() +
+  ggtitle("PCA of log2-CPM")
+```
+```{r}
+# Get the loadings for PC1
+loadings_PC1 <- pca_data$rotation[, 1]
+
+# Convert to data frame and rank by absolute contribution
+top_genes_PC1 <- data.frame(
+  gene = names(loadings_PC1),
+  loading = loadings_PC1,
+  abs_loading = abs(loadings_PC1)
+)
+
+# Sort by absolute loading
+top_genes_PC1 <- top_genes_PC1[order(-top_genes_PC1$abs_loading), ]
+
+# View top N genes (e.g., top 20)
+head(top_genes_PC1, 20)
+```
+
+```{r}
+library(uwot)   
+library(ggplot2)
+
+# 2) Transpose so rows = samples
+mat <- t(logCPM)
+
+# 3) Run UMAP 
+set.seed(100)
+umap_res <- umap(
+  mat,
+  n_neighbors = 5,    
+  min_dist    = 0.1,
+  metric      = "euclidean"
+)
+
+# 4) Build a data.frame for plotting
+umap_df <- as.data.frame(umap_res)
+colnames(umap_df) <- c("UMAP1","UMAP2")
+umap_df$sample <- rownames(umap_df)
+umap_df$group  <- metadata[umap_df$sample, "group"]
+
+# 5) Plot
+ggplot(umap_df, aes(UMAP1, UMAP2, color = group)) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  ggtitle("UMAP of log2-CPM")
+```
+```{r}
+library(dplyr)
+library(ggplot2)
+
+umap_df_filtered <- umap_df %>%
+  filter(group != "lung bone") %>%
+  mutate(group = factor(group))
+
+ggplot(umap_df_filtered, aes(x = UMAP1, y = UMAP2, color = group)) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  ggtitle("UMAP of log2-CPM") +
+  labs(color = "Experimental Group") +
+  theme(legend.position = "top")
+
+```
+
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+
+# 1) Add gene symbol column 
+table_BonevsLung <- table_BonevsLung %>%
+  mutate(symbol = ensembl_id)    
+
+# 2) Compute –log10(FDR)
+table_BonevsLung <- table_BonevsLung %>%
+  mutate(negLog10FDR = -log10(FDR))
+
+# 3) Define cutoffs and call significance
+logFC.cutoff <- 1   
+fdr.cutoff   <- 0.05
+
+table_BonevsLung <- table_BonevsLung %>%
+  mutate(
+    Significance = case_when(
+      FDR < fdr.cutoff & logFC >  logFC.cutoff  ~ "Up",
+      FDR < fdr.cutoff & logFC < -logFC.cutoff  ~ "Down",
+      TRUE                                     ~ "Not Sig"
+    )
+  )
+
+# 4) Volcano plot
+p_BL <- ggplot(table_BonevsLung, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.7, size = 1.8) +
+  scale_color_manual(
+    values = c("Up" = "firebrick", "Down" = "#377EB8", "Not Sig" = "grey70")
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue") +
+  labs(
+    title = "Bone vs Lung: Volcano Plot",
+    x     = expression(log[2]~Fold~Change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  )
+
+# 5) Label top 20 most significant DEGs
+top20_BL <- table_BonevsLung %>%
+  filter(FDR < fdr.cutoff & abs(logFC) > logFC.cutoff) %>%
+  arrange(FDR) %>%
+  slice_head(n = 20)
+
+p_BL <- p_BL +
+  geom_label_repel(
+    data          = top20_BL,
+    aes(label     = symbol),
+    size          = 3,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.5,
+    point.padding = 0.3,
+    segment.color = "black",
+    max.overlaps  = Inf
+  )
+
+# 6) Print
+print(p_BL)
+```
+```{r}
+# 1) Prepare your table
+table_BLvL <- table_BoneLungvsLung %>%
+  mutate(symbol = ensembl_id) %>%
+  mutate(negLog10FDR = -log10(FDR))
+
+# 2) Define thresholds
+logFC.cutoff <- 1
+fdr.cutoff   <- 0.05
+
+# 3) Flag significance
+table_BLvL <- table_BLvL %>%
+  mutate(
+    Significance = case_when(
+      FDR < fdr.cutoff & logFC >  logFC.cutoff  ~ "Up",
+      FDR < fdr.cutoff & logFC < -logFC.cutoff  ~ "Down",
+      TRUE                                     ~ "Not Sig"
+    )
+  )
+
+# 4) Build the base volcano
+p_BLvL <- ggplot(table_BLvL, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(aes(color = Significance), alpha = 0.7, size = 1.8) +
+  scale_color_manual(
+    values = c("Up" = "firebrick", "Down" = "#377EB8", "Not Sig" = "grey70")
+  ) +
+  geom_vline(xintercept = c(-logFC.cutoff, logFC.cutoff),
+             linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = -log10(fdr.cutoff),
+             linetype = "dashed", color = "blue") +
+  labs(
+    title = "Lung (with bone metastasis) vs Lung: Volcano Plot",
+    x     = expression(log[2]~Fold~Change),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.title     = element_blank()
+  )
+
+# 5) Label the top 20 DE genes
+top20_BLvL <- table_BLvL %>%
+  filter(FDR < fdr.cutoff & abs(logFC) > logFC.cutoff) %>%
+  arrange(FDR) %>%
+  slice_head(n = 20)
+
+p_BLvL <- p_BLvL +
+  geom_label_repel(
+    data          = top20_BLvL,
+    aes(label     = symbol),
+    size          = 3,
+    color         = "black",
+    fill          = "white",
+    box.padding   = 0.5,
+    force         = 100,
+    point.padding = 0.3,
+    segment.color = "black",
+    max.overlaps  = Inf
+  )
+
+# 6) Plot
+print(p_BLvL)
+```
+
+Comparison
+
+```{r, message=FALSE, warning=FALSE}
+A549_BonevsP      <- read_csv("A549_LvsP_DEGs_absFC2_FDR05.csv")
+LLC_BonevsP       <- read_csv("LLC_LvsP_DEGs_absFC2_FDR05.csv") %>%
+                      mutate(symbol = toupper(symbol))
+
+Patient_BonevsLung        <- read_csv("BonevsLung_DEGs_absFC2_FDR05.csv")
+Patient_BoneLungvsLung    <- read_csv("BoneLungvsLung_DEGs_absFC2_FDR05.csv")
+```
+
+```{r}
+# Pull out the symbol vectors
+vA   <- A549_BonevsP$symbol
+vL   <- LLC_BonevsP$symbol
+vBL  <- Patient_BonevsLung$symbol
+vBLL <- Patient_BoneLungvsLung$symbol
+
+# Pull out the direction vectors
+dA    <- A549_BonevsP$Direction
+dL    <- LLC_BonevsP$Direction
+dBL   <- Patient_BonevsLung$Direction
+```
+
+```{r}
+# Compute the four intersections
+common_A549_vs_BL  <- intersect(vA,  vBL)
+common_LLC_vs_BL   <- intersect(vL,  vBL)
+common_A549_vs_BLL <- intersect(vA,  vBLL)
+common_LLC_vs_BLL  <- intersect(vL,  vBLL)
+```
+
+```{r}
+# Summarize
+summary_tbl <- tibble(
+  comparison = c(
+    "A549 ∩ BonevsLung",
+    "LLC  ∩ BonevsLung",
+    "A549 ∩ BoneLungvsLung",
+    "LLC  ∩ BoneLungvsLung"
+  ),
+  n_genes = c(
+    length(common_A549_vs_BL),
+    length(common_LLC_vs_BL),
+    length(common_A549_vs_BLL),
+    length(common_LLC_vs_BLL)
+  ),
+  example = c(
+    paste(head(common_A549_vs_BL, 5), collapse=", "),
+    paste(head(common_LLC_vs_BL,  5), collapse=", "),
+    paste(head(common_A549_vs_BLL,5), collapse=", "),
+    paste(head(common_LLC_vs_BLL, 5), collapse=", ")
+  )
+)
+
+print(summary_tbl)
+
+```
+
+```{r}
+# write_lines(common_A549_vs_BL,  "A549_vs_BonevsLung.txt")
+# write_lines(common_LLC_vs_BL,   "LLC_vs_BonevsLung.txt")
+# write_lines(common_A549_vs_BLL, "A549_vs_BoneLungvsLung.txt")
+# write_lines(common_LLC_vs_BLL,  "LLC_vs_BoneLungvsLung.txt")
+```
+
+
+Volcano for Bone vs Lung, with A549‐common genes highlighted
+```{r}
+# Prepare table
+table_BL <- table_BonevsLung %>%
+  mutate(symbol = ensembl_id, negLog10FDR = -log10(FDR))
+
+# Load overlap list
+common_A549_BL <- readLines("A549_vs_BonevsLung.txt")
+
+# Flag overlap
+table_BL <- table_BL %>% mutate(isCommon = symbol %in% common_A549_BL)
+
+# Base plot
+p_BL_A549 <- ggplot(table_BL, aes(logFC, negLog10FDR)) +
+  geom_point(data = filter(table_BL, !isCommon),
+             color="grey80", size=1.5) +
+  geom_point(data = filter(table_BL, isCommon),
+             color="firebrick", size=1.8) +
+  geom_vline(xintercept=c(-1,1), linetype="dashed") +
+  geom_hline(yintercept=-log10(0.05), linetype="dashed") +
+  labs(title="Patients (BonevsLung)\nwith A549 (BonevsParental) common genes in red",
+       x=expression(log[2]~FC), y=expression(-log[10]~FDR)) +
+  theme_minimal(base_size=14) +
+  theme(plot.title=element_text(hjust=0.5))
+
+# Label top 50
+to_label_A549 <- table_BL %>%
+  filter(isCommon) %>%
+  arrange(FDR) %>%
+  slice_head(n=50)
+
+p_BL_A549 +
+  geom_text_repel(data=to_label_A549,
+                  aes(label=symbol),
+                  color="firebrick", size=3,
+                  segment.color="grey50",
+                  box.padding=0.25,
+                  point.padding=0.3,
+                  max.overlaps=Inf)
+
+```
+Bone vs Lung, highlighted LLC vs BonevsLung overlap
+
+```{r}
+# Prepare table
+table_BL <- table_BonevsLung %>%
+  mutate(symbol = ensembl_id, negLog10FDR = -log10(FDR))
+
+# Load overlap list
+common_LLC_BL <- readLines("LLC_vs_BonevsLung.txt")
+
+# Flag overlap
+table_BL <- table_BL %>% mutate(isCommon = symbol %in% common_LLC_BL)
+
+# Base plot
+p_BL_LLC <- ggplot(table_BL, aes(logFC, negLog10FDR)) +
+  geom_point(data = filter(table_BL, !isCommon),
+             color="grey80", size=1.5) +
+  geom_point(data = filter(table_BL, isCommon),
+             color="firebrick", size=1.8) +
+  geom_vline(xintercept=c(-1,1), linetype="dashed") +
+  geom_hline(yintercept=-log10(0.05), linetype="dashed") +
+  labs(title="Patients (BonevsLung)\nwith LLC (BonevsParental) common genes in red",
+       x=expression(log[2]~FC), y=expression(-log[10]~FDR)) +
+  theme_minimal(base_size=14) +
+  theme(plot.title=element_text(hjust=0.5))
+
+# Label top 50
+to_label_LLC <- table_BL %>%
+  filter(isCommon) %>%
+  arrange(FDR) %>%
+  slice_head(n=50)
+
+p_BL_LLC +
+  geom_text_repel(data=to_label_LLC,
+                  aes(label=symbol),
+                   color="firebrick", size=3,
+                  segment.color="grey50",
+                  box.padding=0.25,
+                  point.padding=0.3,
+                  max.overlaps=Inf)
+```
+Bone vs Lung(w/bone metastasis), highlighted A549 vs BoneLungvsLung overlap
+
+```{r}
+# Prepare table
+table_BLL <- table_BoneLungvsLung %>%
+  mutate(symbol = ensembl_id, negLog10FDR = -log10(FDR))
+
+# Load overlap list
+common_A549_BLL <- readLines("A549_vs_BoneLungvsLung.txt")
+
+# Flag overlap
+table_BLL <- table_BLL %>% mutate(isCommon = symbol %in% common_A549_BLL)
+
+# Base plot
+p_BLL_A549 <- ggplot(table_BLL, aes(logFC, negLog10FDR)) +
+  geom_point(data = filter(table_BLL, !isCommon),
+             color="grey80", size=1.5) +
+  geom_point(data = filter(table_BLL, isCommon),
+             color="firebrick", size=1.8) +
+  geom_vline(xintercept=c(-1,1), linetype="dashed") +
+  geom_hline(yintercept=-log10(0.05), linetype="dashed") +
+  labs(title="Patients (BonevsLung w/BoneMetastasis)\nwith A549 (BonevsParental) common genes in red",
+       x=expression(log[2]~FC), y=expression(-log[10]~FDR)) +
+  theme_minimal(base_size=14) +
+  theme(plot.title=element_text(hjust=0.5))
+
+# Label top 50
+to_label_A549_BLL <- table_BLL %>%
+  filter(isCommon) %>%
+  arrange(FDR) %>%
+  slice_head(n=50)
+
+p_BLL_A549 +
+  geom_text_repel(data=to_label_A549_BLL,
+                  aes(label=symbol),
+                  color="firebrick", size=3,
+                  segment.color="grey50",
+                  box.padding=0.25,
+                  point.padding=0.3,
+                  max.overlaps=Inf)
+```
+
+
+
+```{r}
+# Prepare table
+table_BLL <- table_BoneLungvsLung %>%
+  mutate(symbol = ensembl_id, negLog10FDR = -log10(FDR))
+
+# Load overlap list
+common_LLC_BLL <- readLines("LLC_vs_BoneLungvsLung.txt")
+
+# Flag overlap
+table_BLL <- table_BLL %>% mutate(isCommon = symbol %in% common_LLC_BLL)
+
+# Base plot
+p_BLL_LLC <- ggplot(table_BLL, aes(logFC, negLog10FDR)) +
+  geom_point(data = filter(table_BLL, !isCommon),
+             color="grey80", size=1.5) +
+  geom_point(data = filter(table_BLL, isCommon),
+             color="firebrick", size=1.8) +
+  geom_vline(xintercept=c(-1,1), linetype="dashed") +
+  geom_hline(yintercept=-log10(0.05), linetype="dashed") +
+  labs(title="Patients (BonevsLung w/BoneMetastasis)\nwith LLC (BonevsParental) common genes in red",
+       x=expression(log[2]~FC), y=expression(-log[10]~FDR)) +
+  theme_minimal(base_size=14) +
+  theme(plot.title=element_text(hjust=0.5))
+
+# Label top 50
+to_label_LLC_BLL <- table_BLL %>%
+  filter(isCommon) %>%
+  arrange(FDR) %>%
+  slice_head(n=50)
+
+p_BLL_LLC +
+  geom_text_repel(data=to_label_LLC_BLL,
+                  aes(label=symbol),
+                  color="firebrick", size=3,
+                  segment.color="grey50",
+                  box.padding=0.25,
+                  point.padding=0.3,
+                  max.overlaps=Inf)
+```
+Now that share the same direction
+
+```{r}
+common_A549_vs_BL  <- inner_join(
+  A549_BonevsP, 
+  Patient_BonevsLung, 
+  by = c("symbol", "Direction")
+)$symbol
+
+common_LLC_vs_BL   <- inner_join(
+  LLC_BonevsP, 
+  Patient_BonevsLung, 
+  by = c("symbol", "Direction")
+)$symbol
+```
+
+```{r}
+# Summarize
+summary_tbl <- tibble(
+  comparison = c(
+    "A549 ∩ BonevsLung (symbol+dir)",
+    "LLC  ∩ BonevsLung (symbol+dir)"
+  ),
+  n_genes = c(
+    length(common_A549_vs_BL),
+    length(common_LLC_vs_BL)
+  ),
+  example = c(
+    paste(head(common_A549_vs_BL, 5), collapse = ", "),
+    paste(head(common_LLC_vs_BL,  5), collapse = ", ")
+  )
+)
+
+print(summary_tbl)
+```
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+
+write_lines(common_A549_vs_BL,  "A549_vs_BonevsLung_symbol_dir.txt")
+write_lines(common_LLC_vs_BL,   "LLC_vs_BonevsLung_symbol_dir.txt")
+```
+
+```{r}
+# Prepare table
+table_BL <- table_BonevsLung %>%
+  mutate(symbol      = ensembl_id,
+         negLog10FDR = -log10(FDR))
+
+# Load overlap list
+common_A549_BL <- readLines("A549_vs_BonevsLung_symbol_dir.txt")
+
+# Flag overlap
+table_BL <- table_BL %>%
+  mutate(isCommon = symbol %in% common_A549_BL)
+
+# Base volcano
+p_BL_A549 <- ggplot(table_BL, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(data = filter(table_BL, !isCommon),
+             color = "grey80", size = 1.5) +
+  geom_point(data = filter(table_BL, isCommon),
+             color = "firebrick", size = 1.8) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  labs(
+    title = "Patients (BonevsLung)\nwith A549 (BonevsParental) common genes in red",
+    x = expression(log[2]~FC),
+    y = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Label top 50 overlapped
+to_label_A549 <- table_BL %>%
+  filter(isCommon) %>%
+  arrange(FDR) %>%
+  slice_head(n = 50)
+
+p_BL_A549 +
+  geom_text_repel(
+    data          = to_label_A549,
+    aes(label = symbol),
+    color         = "black",
+    size          = 3,
+    segment.color = "grey50",
+    box.padding   = 0.25,
+    point.padding = 0.3,
+    max.overlaps  = Inf
+  )
+
+```
+
+
+```{r}
+
+table_BL <- table_BonevsLung %>%
+  mutate(symbol      = ensembl_id,
+         negLog10FDR = -log10(FDR))
+
+# Load overlap list
+common_LLC_BL <- readLines("LLC_vs_BonevsLung_symbol_dir.txt")
+
+# Flag overlap
+table_BL <- table_BL %>%
+  mutate(isCommon = symbol %in% common_LLC_BL)
+
+# Base volcano
+p_BL_LLC <- ggplot(table_BL, aes(x = logFC, y = negLog10FDR)) +
+  geom_point(data = filter(table_BL, !isCommon),
+             color = "grey80", size = 1.5) +
+  geom_point(data = filter(table_BL, isCommon),
+             color = "firebrick", size = 1.8) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  labs(
+    title = "Patients (BonevsLung)\nwith LLC (BonevsParental) common genes in red",
+    x     = expression(log[2]~FC),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Label top 50 overlapped
+to_label_LLC <- table_BL %>%
+  filter(isCommon) %>%
+  arrange(FDR) %>%
+  slice_head(n = 50)
+
+p_BL_LLC +
+  geom_text_repel(
+    data          = to_label_LLC,
+    aes(label = symbol),
+    color         = "black",
+    size          = 3,
+    segment.color = "grey50",
+    box.padding   = 0.25,
+    point.padding = 0.3,
+    max.overlaps  = Inf
+  )
+```
+Common in comparison LungMtx vs Primary Lung Tumor in: A549, LLC and patients
+
+```{r}
+# Compute the triple‐overlap on symbol+Direction
+also_in_LLC <- intersect(common_A549_vs_BL, common_LLC_vs_BL)
+
+# How many?
+length(also_in_LLC)
+
+# Summarize
+library(tibble)
+tibble(
+  comparison = "A549∩BonevsLung∩LLC",
+  n_genes    = length(also_in_LLC),
+  examples   = paste(head(also_in_LLC, 20), collapse = ", ")
+)
+
+```
+```{r}
+library(readr)
+library(dplyr)
+
+# Build a two‐column tibble of only those triple‐overlap genes
+tbl_triple <- Patient_BonevsLung %>%
+  dplyr::filter(symbol %in% also_in_LLC) %>%
+  dplyr::select(symbol, Direction)
+
+# Save to CSV
+# write_csv(tbl_triple, "Patients_A549_LLC_BonevsLung_symbol_direction.csv")
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+
+# 1. Build the table, flagging the 20 genes
+table_BL <- table_BonevsLung %>%
+  mutate(
+    symbol      = ensembl_id,
+    negLog10FDR = -log10(FDR),
+    isAlsoLLC   = symbol %in% also_in_LLC
+  )
+
+# 2. Plot
+ggplot(table_BL, aes(x = logFC, y = negLog10FDR)) +
+  # all genes in light grey
+  geom_point(color = "grey90", size = 1.2) +
+
+  # highlight the 20 genes in red
+  geom_point(
+    data  = filter(table_BL, isAlsoLLC),
+    color = "firebrick",
+    size  = 2.5
+  ) +
+
+  # thresholds
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+
+  # label those 20 genes
+  geom_text_repel(
+    data = filter(table_BL, isAlsoLLC),
+    aes(label = symbol),
+    color         = "black",
+    size          = 3,
+    segment.color = "grey50",
+    box.padding   = 0.3,
+    point.padding = 0.3,
+    max.overlaps  = Inf
+  ) +
+
+  # styling
+  labs(
+    title = "Bone Metastasis vs Lung Primary Tumor: shared genetic signature in patients and murine models (A549 and LLC)",
+    x     = expression(log[2]~FC),
+    y     = expression(-log[10]~FDR)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title     = element_text(hjust = 0.5),
+    legend.position = "none"
+  )
+
+```
+
+
+Common in A549 and BonevsLung that are also in LLC
+
+```{r}
+also_in_LLC <- intersect(common_A549_vs_BL, vL)
+
+length(also_in_LLC)
+
+library(tibble)
+tibble(
+  comparison = "A549∩BonevsLung∩LLC",
+  n_genes    = length(also_in_LLC),
+  examples   = paste(also_in_LLC[1:20], collapse = ", ")
+)
+```
+```{r, warning=FALSE, message=FALSE}
+library(dplyr)
+library(readr)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(enrichplot)
+```
+
+```{r}
+common_symbols <- table_BonevsLung %>%
+  filter(ensembl_id %in% also_in_LLC) %>% 
+  pull(symbol) %>%                         
+  na.omit() %>% 
+  unique()
+
+length(common_symbols)
+
+#write_csv(tibble(gene = common_symbols), "common_A549_BoneLung_LLC_genes.csv")
+```
+```{r}
+common_sig <- table_BL %>%
+  filter(symbol %in% common_symbols)  # or ensembl_id %in% also_in_LLC
+
+# 2) Inspect
+nrow(common_sig)
+head(common_sig)
+
+# 3) Save as CSV (all columns preserved)
+# write_csv(common_sig, "BoneMtxvsLung_Patients_A549_LLC.csv")
+```
+
+```{r}
+background <- table_BonevsLung %>%
+  filter(!is.na(symbol)) %>%
+  pull(symbol) %>%
+  unique()
+```
+
+```{r}
+ego_common <- enrichGO(gene         = common_symbols,
+                       universe     = background,
+                       OrgDb        = org.Hs.eg.db,
+                       keyType      = "SYMBOL",
+                       ont          = "BP",
+                       pAdjustMethod= "BH",
+                       pvalueCutoff = 0.05,
+                       qvalueCutoff = 0.2,
+                       minGSSize    = 10,
+                       maxGSSize    = 500,
+                       readable     = TRUE)
+
+# 5) Inspect & plot
+if (nrow(as.data.frame(ego_common)) > 0) {
+  print(head(ego_common))
+  dotplot(ego_common, showCategory = 20) +
+    ggtitle("GO‑BP enrichment: A549∩BoneLung∩LLC")
+  
+  # Enrichment‐map if ≥2 terms
+  if (nrow(as.data.frame(ego_common)) >= 2) {
+    ego_sim <- pairwise_termsim(
+      ego_common,
+      semData = GOSemSim::godata(org.Hs.eg.db, ont="BP")
+    )
+    emapplot(ego_sim, showCategory = 20) +
+      theme(legend.position = "none")
+  }
+} else {
+  message("No significant GO‑BP terms at these cutoffs.")
+}
+```
+
+```{r}
+ego_cc_common <- enrichGO(
+  gene          = common_symbols,
+  universe      = background,
+  OrgDb         = org.Hs.eg.db,
+  keyType       = "SYMBOL",
+  ont           = "CC",            
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2,
+  minGSSize     = 10,
+  maxGSSize     = 500,
+  readable      = TRUE
+)
+
+# 2) Inspect & plot
+if (nrow(as.data.frame(ego_cc_common)) > 0) {
+  print(head(ego_cc_common))
+
+  # Dotplot of top 20 CC terms
+  dotplot(ego_cc_common, showCategory = 20) +
+    ggtitle("GO‑CC enrichment: A549∩BoneLung∩LLC") +
+    theme_minimal(base_size = 14)
+
+  # Enrichment‐map if ≥2 terms
+  if (nrow(as.data.frame(ego_cc_common)) >= 2) {
+    cc_sim <- pairwise_termsim(
+      ego_cc_common,
+      semData = GOSemSim::godata(org.Hs.eg.db, ont = "CC")
+    )
+    emapplot(cc_sim, showCategory = 20) +
+      theme(legend.position = "none") +
+      ggtitle("GO‑CC Enrichment Map")
+  }
+} else {
+  message("No significant GO‑CC terms at these cutoffs.")
+}
+```
+```{r}
+# 1) Run GO‑MF ORA
+ego_mf_common <- enrichGO(
+  gene          = common_symbols,
+  universe      = background,
+  OrgDb         = org.Hs.eg.db,
+  keyType       = "SYMBOL",
+  ont           = "MF",            
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2,
+  minGSSize     = 10,
+  maxGSSize     = 500,
+  readable      = TRUE
+)
+
+# 2) Inspect & plot
+if (nrow(as.data.frame(ego_mf_common)) > 0) {
+  print(head(ego_mf_common))
+
+  # Dotplot of top 20 MF terms
+  dotplot(ego_mf_common, showCategory = 20) +
+    ggtitle("GO‑MF enrichment: A549∩BoneLung∩LLC") +
+    theme_minimal(base_size = 14)
+
+  # Enrichment‑map if ≥2 terms
+  if (nrow(as.data.frame(ego_mf_common)) >= 2) {
+    mf_sim <- pairwise_termsim(
+      ego_mf_common,
+      semData = GOSemSim::godata(org.Hs.eg.db, ont = "MF")
+    )
+    emapplot(mf_sim, showCategory = 20) +
+      theme(legend.position = "none") +
+      ggtitle("GO‑MF Enrichment Map")
+  }
+} else {
+  message("No significant GO‑MF terms at these cutoffs.")
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
